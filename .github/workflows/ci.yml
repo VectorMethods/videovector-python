@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Ruff
+        run: ruff check videovector tests examples
+
+      - name: MyPy
+        run: mypy videovector
+
+      - name: Pytest
+        run: pytest -q tests
+
+      - name: Build artifacts
+        run: python -m build
+
+      - name: Twine check
+        run: python -m twine check dist/*
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Secret pattern scan
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          ignored_parts = {
+              ".git",
+              ".mypy_cache",
+              ".pytest_cache",
+              ".ruff_cache",
+              "__pycache__",
+              "build",
+              "dist",
+              "node_modules",
+          }
+          searchable_suffixes = {
+              ".py",
+              ".md",
+              ".toml",
+              ".yml",
+              ".yaml",
+              ".json",
+              ".txt",
+              ".example",
+          }
+          patterns = [
+              re.compile("sk_" + "live", re.IGNORECASE),
+              re.compile("AK" + r"IA[0-9A-Z]{8,}"),
+              re.compile("AS" + r"IA[0-9A-Z]{8,}"),
+              re.compile("AI" + r"za[0-9A-Za-z_-]{20,}"),
+              re.compile("ey" + r"J[A-Za-z0-9_-]{8,}"),
+              re.compile("gh" + r"[pousr]_[A-Za-z0-9_]{20,}"),
+              re.compile("xo" + r"x[baprs]-[A-Za-z0-9-]{10,}"),
+              re.compile("-" * 5 + r"BEGIN [A-Z ]*PRIVATE KEY" + "-" * 5),
+              re.compile(r'"private' + r'_key"\s*:'),
+          ]
+
+          findings: list[str] = []
+          for path in Path(".").rglob("*"):
+              if not path.is_file() or any(part in ignored_parts for part in path.parts):
+                  continue
+              if path.suffix not in searchable_suffixes and path.name != ".env.example":
+                  continue
+              text = path.read_text(encoding="utf-8", errors="ignore")
+              for pattern in patterns:
+                  if pattern.search(text) and "test_examples_public_safety.py" not in str(path):
+                      findings.append(f"{path}: matches {pattern.pattern}")
+
+          if findings:
+              print("\n".join(findings))
+              raise SystemExit(1)
+          PY
