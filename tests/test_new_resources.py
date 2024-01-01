@@ -140,6 +140,15 @@ def _index_payload() -> dict[str, Any]:
     }
 
 
+def _index_deletion_payload(status: str = "draining") -> dict[str, Any]:
+    return {
+        "index_id": "idx_1",
+        "deletion_id": "index-delete-1",
+        "status": status,
+        "retry_after_seconds": None if status == "deleted" else 5,
+    }
+
+
 def _prompt_payload() -> dict[str, Any]:
     return {
         "prompt_id": "prompt_1",
@@ -229,6 +238,15 @@ def _video_payload() -> dict[str, Any]:
         "media_type": "video",
         "processing_status": [_video_processing_status_payload()],
         "marker": _marker_payload(),
+    }
+
+
+def _video_deletion_payload(status: str = "deleting") -> dict[str, Any]:
+    return {
+        "video_id": "video_1",
+        "deletion_id": "video-delete-1",
+        "status": status,
+        "retry_after_seconds": None if status == "deleted" else 5,
     }
 
 
@@ -1269,6 +1287,73 @@ def test_videos_create_async_adds_optional_source_connector_without_breaking_leg
         "index_id": "idx_1",
         "source_connector_id": "connector_1",
     }
+
+
+def test_durable_index_and_video_deletion_sync() -> None:
+    http = _FakeSyncHttp(
+        {
+            ("DELETE", "/indexes/idx_1"): _index_deletion_payload(),
+            ("GET", "/indexes/idx_1/deletion"): _index_deletion_payload("deleted"),
+            ("DELETE", "/videos/video_1"): _video_deletion_payload(),
+            ("GET", "/videos/video_1/deletion"): _video_deletion_payload("deleted"),
+        }
+    )
+    indexes = IndexesResource(http)  # type: ignore[arg-type]
+    videos = VideosResource(http)  # type: ignore[arg-type]
+
+    accepted_index = indexes.delete("idx_1")
+    completed_index = indexes.get_deletion("idx_1")
+    accepted_video = videos.delete("video_1")
+    completed_video = videos.get_deletion("video_1")
+
+    assert accepted_index.status == "draining"
+    assert accepted_index.retry_after_seconds == 5
+    assert completed_index.status == "deleted"
+    assert completed_index.deletion_id == accepted_index.deletion_id
+    assert accepted_video.status == "deleting"
+    assert accepted_video.retry_after_seconds == 5
+    assert completed_video.status == "deleted"
+    assert completed_video.deletion_id == accepted_video.deletion_id
+    assert [(call["method"], call["endpoint"]) for call in http.calls] == [
+        ("DELETE", "/indexes/idx_1"),
+        ("GET", "/indexes/idx_1/deletion"),
+        ("DELETE", "/videos/video_1"),
+        ("GET", "/videos/video_1/deletion"),
+    ]
+
+
+def test_durable_index_and_video_deletion_async() -> None:
+    http = _FakeAsyncHttp(
+        {
+            ("DELETE", "/indexes/idx_1"): _index_deletion_payload(),
+            ("GET", "/indexes/idx_1/deletion"): _index_deletion_payload("deleted"),
+            ("DELETE", "/videos/video_1"): _video_deletion_payload(),
+            ("GET", "/videos/video_1/deletion"): _video_deletion_payload("deleted"),
+        }
+    )
+    indexes = AsyncIndexesResource(http)  # type: ignore[arg-type]
+    videos = AsyncVideosResource(http)  # type: ignore[arg-type]
+
+    async def _run() -> None:
+        accepted_index = await indexes.delete("idx_1")
+        completed_index = await indexes.get_deletion("idx_1")
+        accepted_video = await videos.delete("video_1")
+        completed_video = await videos.get_deletion("video_1")
+
+        assert accepted_index.status == "draining"
+        assert completed_index.status == "deleted"
+        assert completed_index.deletion_id == accepted_index.deletion_id
+        assert accepted_video.status == "deleting"
+        assert completed_video.status == "deleted"
+        assert completed_video.deletion_id == accepted_video.deletion_id
+
+    asyncio.run(_run())
+    assert [(call["method"], call["endpoint"]) for call in http.calls] == [
+        ("DELETE", "/indexes/idx_1"),
+        ("GET", "/indexes/idx_1/deletion"),
+        ("DELETE", "/videos/video_1"),
+        ("GET", "/videos/video_1/deletion"),
+    ]
 
 
 def test_videos_prompt_runs_async_omits_limit_when_unspecified() -> None:

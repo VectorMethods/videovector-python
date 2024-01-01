@@ -1003,6 +1003,24 @@ class DeleteResponse(BaseModel):
     message: str
 
 
+class IndexDeletionResponse(BaseModel):
+    """Durable lifecycle returned when an index deletion is accepted."""
+
+    index_id: str
+    deletion_id: str
+    status: Literal["draining", "deleting", "deleted"]
+    retry_after_seconds: Optional[int] = Field(default=None, ge=1)
+
+
+class VideoDeletionResponse(BaseModel):
+    """Durable lifecycle returned when a video deletion is accepted."""
+
+    video_id: str
+    deletion_id: str
+    status: Literal["draining", "deleting", "deleted"]
+    retry_after_seconds: Optional[int] = Field(default=None, ge=1)
+
+
 class ProcessingStartedResponse(BaseModel):
     """Response when video processing is started."""
 

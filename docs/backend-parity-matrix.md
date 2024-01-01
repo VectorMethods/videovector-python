@@ -17,7 +17,8 @@ This document maps the Python SDK surface (`videovector`) to backend API endpoin
 | `videos.create` | `POST` | `/videos` | `Video` | `write` (optional `source_connector_id` for a caller-owned private GCS import connector) |
 | `videos.upload` | `POST` | `/videos/upload` | `UploadResult` | `write` |
 | `videos.retrieve` | `GET` | `/videos/{video_id}` | `Video` | `read` |
-| `videos.delete` | `DELETE` | `/videos/{video_id}` | `DeleteResponse` | `admin` |
+| `videos.delete` | `DELETE` | `/videos/{video_id}` | `VideoDeletionResponse` | `admin` |
+| `videos.get_deletion` | `GET` | `/videos/{video_id}/deletion` | `VideoDeletionResponse` | `admin` |
 | `videos.process` | `POST` | `/videos/{video_id}/process` | `ProcessingStartedResponse` | `write` |
 | `videos.list_segments` | `GET` | `/videos/{video_id}/segments` | `SyncPage[Segment]`/`AsyncPage[Segment]` | `read` |
 | `videos.batch_retrieve` | `POST` | `/videos/batch` | `List[VideoWithDetails]` | `read` |
@@ -29,7 +30,8 @@ This document maps the Python SDK surface (`videovector`) to backend API endpoin
 | `indexes.create` | `POST` | `/indexes` | `Index` | `write` |
 | `indexes.retrieve` | `GET` | `/indexes/{index_id}` | `Index` | `search` |
 | `indexes.list` | `GET` | `/indexes` | `List[Index]` | `search` |
-| `indexes.delete` | `DELETE` | `/indexes/{index_id}` | `DeleteResponse` | `admin` |
+| `indexes.delete` | `DELETE` | `/indexes/{index_id}` | `IndexDeletionResponse` | `admin` |
+| `indexes.get_deletion` | `GET` | `/indexes/{index_id}/deletion` | `IndexDeletionResponse` | `admin` |
 | `indexes.list_videos` | `GET` | `/indexes/{index_id}/videos` | `SyncPage[Video]`/`AsyncPage[Video]` | `read` |
 | `indexes.list_prompt_runs` | `GET` | `/indexes/{index_id}/prompt-runs` | `SyncPage[PromptRun]`/`AsyncPage[PromptRun]` | `read` |
 | `prompts.create` | `POST` | `/prompts` | `Prompt` | `write` |

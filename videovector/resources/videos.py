@@ -17,13 +17,13 @@ from .._pagination import (
 )
 from .._types import (
     BatchVideoSegmentsTarget,
-    DeleteResponse,
     ProcessingStartedResponse,
     PromptRun,
     Segment,
     SignedUrl,
     UploadResult,
     Video,
+    VideoDeletionResponse,
     VideoSegments,
     VideoStatus,
     VideoWithDetails,
@@ -176,22 +176,28 @@ class VideosResource:
         response = self._client.get(f"/videos/{video_id}")
         return Video.model_validate(response)
 
-    def delete(self, video_id: str) -> DeleteResponse:
+    def delete(self, video_id: str) -> VideoDeletionResponse:
         """
-        Delete a video.
+        Start or resume durable video deletion.
 
         Args:
             video_id: Video ID to delete
 
         Returns:
-            DeleteResponse: Confirmation message
+            VideoDeletionResponse: Durable deletion identity and progress
 
         Raises:
             NotFoundError: If video doesn't exist
             AuthorizationError: If admin scope is required
         """
         response = self._client.delete(f"/videos/{video_id}")
-        return DeleteResponse.model_validate(response)
+        return VideoDeletionResponse.model_validate(response)
+
+    def get_deletion(self, video_id: str) -> VideoDeletionResponse:
+        """Retrieve durable deletion progress for a video."""
+
+        response = self._client.get(f"/videos/{video_id}/deletion")
+        return VideoDeletionResponse.model_validate(response)
 
     def process(
         self,
@@ -466,10 +472,16 @@ class AsyncVideosResource:
         response = await self._client.get(f"/videos/{video_id}")
         return Video.model_validate(response)
 
-    async def delete(self, video_id: str) -> DeleteResponse:
-        """Delete a video."""
+    async def delete(self, video_id: str) -> VideoDeletionResponse:
+        """Start or resume durable video deletion."""
         response = await self._client.delete(f"/videos/{video_id}")
-        return DeleteResponse.model_validate(response)
+        return VideoDeletionResponse.model_validate(response)
+
+    async def get_deletion(self, video_id: str) -> VideoDeletionResponse:
+        """Retrieve durable deletion progress for a video."""
+
+        response = await self._client.get(f"/videos/{video_id}/deletion")
+        return VideoDeletionResponse.model_validate(response)
 
     async def process(
         self,

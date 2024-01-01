@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added typed, resumable index and video deletion contracts. Synchronous and
+  asynchronous `delete(...)` calls now return the durable deletion identity
+  and status, and `get_deletion(...)` reads progress until `deleted`.
 - Added run-scoped batch segment retrieval through
   `BatchVideoSegmentsTarget` and synchronous/asynchronous
   `videos.batch_segments_for_targets(...)`; `VideoSegments` now exposes the
