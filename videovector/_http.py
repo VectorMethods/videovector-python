@@ -106,11 +106,7 @@ class SyncHttpClient:
                         time.sleep(retry_after)
                         retry_count += 1
                         continue
-                    raise RateLimitError(
-                        "Rate limit exceeded",
-                        status_code=429,
-                        retry_after=retry_after,
-                    )
+                    _raise_rate_limit_response(response, retry_after=retry_after)
 
                 if (
                     allow_retry
@@ -342,11 +338,7 @@ class AsyncHttpClient:
                         await asyncio.sleep(retry_after)
                         retry_count += 1
                         continue
-                    raise RateLimitError(
-                        "Rate limit exceeded",
-                        status_code=429,
-                        retry_after=retry_after,
-                    )
+                    _raise_rate_limit_response(response, retry_after=retry_after)
 
                 if (
                     allow_retry
@@ -493,6 +485,28 @@ class AsyncHttpClient:
 
     async def __aexit__(self, *args: object) -> None:
         await self.close()
+
+
+def _raise_rate_limit_response(response: httpx.Response, *, retry_after: int) -> None:
+    """Preserve the API's structured 429 contract on the typed SDK error."""
+    try:
+        parsed_body = response.json()
+        body = parsed_body if isinstance(parsed_body, dict) else {"message": response.text}
+    except Exception:
+        body = {"message": response.text or "Rate limit exceeded"}
+
+    try:
+        _raise_for_status(429, body)
+    except RateLimitError as error:
+        error.retry_after = retry_after
+        raise
+
+    # Defensive fallback if the exception mapper ever changes its 429 branch.
+    raise RateLimitError(
+        "Rate limit exceeded",
+        status_code=429,
+        retry_after=retry_after,
+    )
 
 
 def _clean_params(params: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

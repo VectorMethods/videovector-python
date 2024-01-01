@@ -67,6 +67,7 @@ class VideosResource:
         title: str,
         video_uri: str,
         index_id: str,
+        source_connector_id: Optional[str] = None,
     ) -> Video:
         """
         Create a video from an existing GCS URI.
@@ -75,6 +76,9 @@ class VideosResource:
             title: Video title (1-255 characters)
             video_uri: GCS URI of the video (gs://bucket/path)
             index_id: Target index ID
+            source_connector_id: Optional caller-owned connector used to import a
+                private external GCS object. Public and platform-managed objects
+                do not require this field.
 
         Returns:
             Video: Created video object
@@ -83,14 +87,14 @@ class VideosResource:
             ValidationError: If parameters are invalid
             NotFoundError: If index doesn't exist
         """
-        response = self._client.post(
-            "/videos",
-            json={
-                "title": title,
-                "video_uri": video_uri,
-                "index_id": index_id,
-            },
-        )
+        payload = {
+            "title": title,
+            "video_uri": video_uri,
+            "index_id": index_id,
+        }
+        if source_connector_id is not None:
+            payload["source_connector_id"] = source_connector_id
+        response = self._client.post("/videos", json=payload)
         return Video.model_validate(response)
 
     def upload(
@@ -373,16 +377,17 @@ class AsyncVideosResource:
         title: str,
         video_uri: str,
         index_id: str,
+        source_connector_id: Optional[str] = None,
     ) -> Video:
-        """Create a video from an existing GCS URI."""
-        response = await self._client.post(
-            "/videos",
-            json={
-                "title": title,
-                "video_uri": video_uri,
-                "index_id": index_id,
-            },
-        )
+        """Create a video from GCS, optionally through an owned connector."""
+        payload = {
+            "title": title,
+            "video_uri": video_uri,
+            "index_id": index_id,
+        }
+        if source_connector_id is not None:
+            payload["source_connector_id"] = source_connector_id
+        response = await self._client.post("/videos", json=payload)
         return Video.model_validate(response)
 
     async def upload(

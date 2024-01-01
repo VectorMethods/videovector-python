@@ -14,7 +14,7 @@ This document maps the Python SDK surface (`videovector`) to backend API endpoin
 
 | SDK Method | HTTP | Endpoint | Response Model | Backend Auth Requirement |
 |---|---|---|---|---|
-| `videos.create` | `POST` | `/videos` | `Video` | `write` |
+| `videos.create` | `POST` | `/videos` | `Video` | `write` (optional `source_connector_id` for a caller-owned private GCS import connector) |
 | `videos.upload` | `POST` | `/videos/upload` | `UploadResult` | `write` |
 | `videos.retrieve` | `GET` | `/videos/{video_id}` | `Video` | `read` |
 | `videos.delete` | `DELETE` | `/videos/{video_id}` | `DeleteResponse` | `admin` |
@@ -119,3 +119,4 @@ The following backend surfaces are intentionally out of scope for this SDK relea
 
 - Endpoint auth requirements are enforced by backend middleware and should be treated as authoritative.
 - Some endpoints are authenticated via either API key or JWT bearer, while `/api-keys/*` requires JWT bearer specifically.
+- Omitting `source_connector_id` from `videos.create` preserves the original wire payload and remains the correct call for public GCS objects and server-managed uploads/imports.

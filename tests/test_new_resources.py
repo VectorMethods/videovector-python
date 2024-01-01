@@ -1043,6 +1043,31 @@ def test_videos_prompt_runs_and_playground_sync() -> None:
     assert page.data[0].processing_status[0].video_level.attempt_id == "attempt_1"
 
 
+def test_videos_create_sync_adds_optional_source_connector_without_breaking_legacy_payload() -> None:
+    http = _FakeSyncHttp({("POST", "/videos"): _video_payload()})
+    resource = VideosResource(http)  # type: ignore[arg-type]
+
+    resource.create(title="Demo", video_uri="gs://bucket/demo.mp4", index_id="idx_1")
+    assert http.calls[-1]["json"] == {
+        "title": "Demo",
+        "video_uri": "gs://bucket/demo.mp4",
+        "index_id": "idx_1",
+    }
+
+    resource.create(
+        title="Private demo",
+        video_uri="gs://private-bucket/demo.mp4",
+        index_id="idx_1",
+        source_connector_id="connector_1",
+    )
+    assert http.calls[-1]["json"] == {
+        "title": "Private demo",
+        "video_uri": "gs://private-bucket/demo.mp4",
+        "index_id": "idx_1",
+        "source_connector_id": "connector_1",
+    }
+
+
 def test_videos_prompt_runs_sync_omits_limit_when_unspecified() -> None:
     http = _FakeSyncHttp({("GET", "/videos/video_1/prompt-runs"): [_prompt_run_payload()]})
     resource = VideosResource(http)  # type: ignore[arg-type]
@@ -1084,6 +1109,38 @@ def test_videos_prompt_runs_and_playground_async() -> None:
         assert page.data[0].processing_status[0].segments[0].attempt_id == "attempt_seg_1"
 
     asyncio.run(_run())
+
+
+def test_videos_create_async_adds_optional_source_connector_without_breaking_legacy_payload() -> None:
+    http = _FakeAsyncHttp({("POST", "/videos"): _video_payload()})
+    resource = AsyncVideosResource(http)  # type: ignore[arg-type]
+
+    async def _run() -> None:
+        await resource.create(
+            title="Demo",
+            video_uri="gs://bucket/demo.mp4",
+            index_id="idx_1",
+        )
+        assert http.calls[-1]["json"] == {
+            "title": "Demo",
+            "video_uri": "gs://bucket/demo.mp4",
+            "index_id": "idx_1",
+        }
+
+        await resource.create(
+            title="Private demo",
+            video_uri="gs://private-bucket/demo.mp4",
+            index_id="idx_1",
+            source_connector_id="connector_1",
+        )
+
+    asyncio.run(_run())
+    assert http.calls[-1]["json"] == {
+        "title": "Private demo",
+        "video_uri": "gs://private-bucket/demo.mp4",
+        "index_id": "idx_1",
+        "source_connector_id": "connector_1",
+    }
 
 
 def test_videos_prompt_runs_async_omits_limit_when_unspecified() -> None:
