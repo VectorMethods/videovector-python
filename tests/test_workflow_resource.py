@@ -112,22 +112,13 @@ class CaptureSyncHttp:
                 "prompt": _prompt_payload(),
             }
         return {
-            "video": {
-                "video_id": "video_1",
-                "title": "demo",
-                "video_uri": "gs://bucket/demo.mp4",
-                "status": "uploaded",
-                "message": "ok",
-                "media_type": "video",
-                "duration_seconds": 12.5,
-                "thumbnail_gcs_uri": "gs://bucket/demo.jpg",
-                "thumbnail_uri": "https://media.example/demo.jpg",
-                "thumbnail_available": True,
-            },
-            "destination": {
-                "type": "playground",
-                "index_created": False,
-            },
+            "job_id": "job_1",
+            "status": "pending",
+            "phase": "staging",
+            "source_kind": "upload",
+            "progress": {"total_files": 1},
+            "outputs": {"items": [], "next_cursor": None, "total": 0},
+            "video_ids": [],
         }
 
     def get(self, endpoint: str, **kwargs: Any) -> dict[str, Any]:
@@ -145,7 +136,7 @@ class CaptureAsyncHttp(CaptureSyncHttp):
         return super().get(endpoint, **kwargs)
 
 
-def test_process_uses_low_cost_defaults_and_inline_prompt() -> None:
+def test_process_inherits_prompt_defaults_and_inline_prompt() -> None:
     http = CaptureSyncHttp()
     response = WorkflowResource(http).process(prompt_instruction="Find products")  # type: ignore[arg-type]
 
@@ -155,9 +146,6 @@ def test_process_uses_low_cost_defaults_and_inline_prompt() -> None:
     assert request["endpoint"] == "/workflow/process"
     assert request["json"] == {
         "prompt_instruction": "Find products",
-        "segmentation_mode": "smart",
-        "advanced_transcription": False,
-        "create_image_embeddings": False,
     }
     assert request["idempotency_key"].startswith("workflow-process:")
 
@@ -171,7 +159,7 @@ def test_fixed_processing_defaults_duration_on_backend_and_validates_other_modes
     with pytest.raises(ValueError, match="accepted only"):
         resource.process(
             prompt_id="prompt_1",
-            segmentation_mode="smart",
+            segmentation_mode="content_aware",
             fixed_segment_duration_seconds=10,
         )
 
@@ -214,11 +202,9 @@ def test_upload_streams_path_and_generates_key(tmp_path: Path) -> None:
 
     response = WorkflowResource(http).upload(source)  # type: ignore[arg-type]
 
-    assert response.video.video_id == "video_1"
-    assert response.video.duration_seconds == 12.5
-    assert response.video.thumbnail_gcs_uri == "gs://bucket/demo.jpg"
-    assert response.video.thumbnail_uri == "https://media.example/demo.jpg"
-    assert response.video.thumbnail_available is True
+    assert response.job_id == "job_1"
+    assert response.status == "pending"
+    assert response.outputs.items == []
     request = http.posts[-1]
     assert request["endpoint"] == "/workflow/upload"
     assert request["idempotency_key"].startswith("workflow-upload:")
@@ -242,7 +228,7 @@ def test_async_workflow_surface_parity(tmp_path: Path) -> None:
         resource = AsyncWorkflowResource(http)  # type: ignore[arg-type]
 
         uploaded = await resource.upload(source, index_name="Field Review Clips")
-        assert uploaded.video.video_id == "video_1"
+        assert uploaded.job_id == "job_1"
         assert http.posts[-1]["idempotency_key"].startswith("workflow-upload:")
 
         defined = await resource.define("Find products")
@@ -263,3 +249,12 @@ def test_async_workflow_surface_parity(tmp_path: Path) -> None:
         assert searchable.status == "completed"
 
     asyncio.run(run())
+
+
+def test_import_job_selector_processes_complete_manifest_without_video_ids() -> None:
+    http = CaptureSyncHttp()
+    resource = WorkflowResource(http)  # type: ignore[arg-type]
+    resource.process(prompt_id="prompt_1", import_job_id="job_1")
+    assert http.posts[-1]["json"] == {"prompt_id": "prompt_1", "import_job_id": "job_1"}
+    with pytest.raises(ValueError, match="cannot be combined"):
+        resource.process(prompt_id="prompt_1", import_job_id="job_1", video_ids=["video_1"])

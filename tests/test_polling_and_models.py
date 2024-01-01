@@ -102,11 +102,13 @@ class _CaptureSyncPostHttp:
         params: Optional[dict[str, Any]] = None,
         headers: Optional[dict[str, str]] = None,
         idempotency_key: Optional[str] = None,
+        processing_intent: Optional[str] = None,
     ) -> dict[str, Any]:
         self.last_post = {
             "endpoint": endpoint,
             "json": json,
             "idempotency_key": idempotency_key,
+            "processing_intent": processing_intent,
         }
         return _prompt_run_payload("pending")
 
@@ -122,6 +124,7 @@ class _CaptureAsyncPostHttp(_CaptureSyncPostHttp):
         params: Optional[dict[str, Any]] = None,
         headers: Optional[dict[str, str]] = None,
         idempotency_key: Optional[str] = None,
+        processing_intent: Optional[str] = None,
     ) -> dict[str, Any]:
         return super().post(
             endpoint,
@@ -131,6 +134,7 @@ class _CaptureAsyncPostHttp(_CaptureSyncPostHttp):
             params=params,
             headers=headers,
             idempotency_key=idempotency_key,
+            processing_intent=processing_intent,
         )
 
 
@@ -238,6 +242,7 @@ def test_prompt_runs_execute_generates_idempotency_key_when_missing() -> None:
     assert run.run_id == "run_1"
     assert http.last_post is not None
     assert http.last_post["endpoint"] == "/prompt-runs/execute"
+    assert http.last_post["processing_intent"] == "process_media"
     generated_key = str(http.last_post["idempotency_key"] or "")
     assert generated_key.startswith("prompt-run-execute:")
     assert len(generated_key) > len("prompt-run-execute:")
@@ -255,6 +260,7 @@ def test_prompt_runs_execute_preserves_explicit_idempotency_key() -> None:
 
     assert http.last_post is not None
     assert http.last_post["idempotency_key"] == "custom-key-1"
+    assert http.last_post["processing_intent"] == "process_media"
 
 
 def test_prompt_runs_execute_async_generates_idempotency_key_when_missing() -> None:
@@ -268,6 +274,7 @@ def test_prompt_runs_execute_async_generates_idempotency_key_when_missing() -> N
         )
         assert run.run_id == "run_1"
         assert http.last_post is not None
+        assert http.last_post["processing_intent"] == "process_media"
         generated_key = str(http.last_post["idempotency_key"] or "")
         assert generated_key.startswith("prompt-run-execute:")
 

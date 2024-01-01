@@ -19,7 +19,14 @@ def main() -> None:
             title=optional_env("VIDEO_VECTOR_MEDIA_TITLE", "Store walk-through"),
             index_id=index.index_id,
         )
-        print(f"uploaded {upload.video_id} into {index.index_id}")
+        client.import_jobs.wait_for_completion(upload.job_id)
+        for part in client.import_jobs.iter_outputs(upload.job_id):
+            print(f"imported {part.video_id} into {index.index_id}")
+        run = client.workflow.process(
+            import_job_id=upload.job_id,
+            prompt_instruction="Describe visible activities and objects.",
+        )
+        client.workflow.wait_until_searchable(run.run.run_id)
 
         results = client.search.text(
             index_id=index.index_id,

@@ -116,7 +116,7 @@ class PromptsResource:
             prompt_text: Prompt text for LLM (10-5000 characters)
             json_schema: JSON Schema for structured output
             description: Optional description (max 500 characters)
-            video_level: Optional video/audio-level synthesis configuration
+            video_level: Optional grounded video/audio-level extraction configuration
             semantic_indexing: Optional prompt-level semantic indexing configuration
             idempotency_key: Optional key for idempotent prompt creation
 
@@ -213,7 +213,7 @@ class PromptsResource:
             description: New description (max 500 characters)
             prompt_text: New prompt text
             json_schema: New segment extraction schema
-            video_level: Replacement video/audio-level synthesis config
+            video_level: Replacement grounded video/audio-level extraction config
             semantic_indexing: Replacement prompt-level semantic indexing config
             clear_video_level: Remove any existing video-level config
             idempotency_key: Optional key for idempotent prompt updates

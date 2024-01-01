@@ -224,6 +224,7 @@ class PromptRunsResource:
         resolved_idempotency_key = _resolve_generated_idempotency_key("execute", idempotency_key)
         response = self._client.post(
             "/prompt-runs/execute",
+            processing_intent="process_media",
             json=body,
             idempotency_key=resolved_idempotency_key,
         )
@@ -327,7 +328,7 @@ class PromptRunsResource:
         return [LlmCall.model_validate(call) for call in response]
 
     def get_video_result(self, run_id: str, video_id: str) -> PromptRunVideoResult:
-        """Get the video/audio-level synthesis result for one media item in a run."""
+        """Get the grounded video/audio-level extraction result for one media item in a run."""
         response = self._client.get(f"/prompt-runs/{run_id}/videos/{video_id}/video-result")
         return PromptRunVideoResult.model_validate(response)
 
@@ -350,6 +351,7 @@ class PromptRunsResource:
         )
         response = self._client.post(
             f"/prompt-runs/{run_id}/videos/{video_id}/segments/{segment_id}/retry",
+            processing_intent="retry_prompt_run_segment",
             idempotency_key=resolved_idempotency_key,
         )
         return PromptRunSegmentRetry.model_validate(response)
@@ -479,6 +481,7 @@ class AsyncPromptRunsResource:
         resolved_idempotency_key = _resolve_generated_idempotency_key("execute", idempotency_key)
         response = await self._client.post(
             "/prompt-runs/execute",
+            processing_intent="process_media",
             json=body,
             idempotency_key=resolved_idempotency_key,
         )
@@ -550,7 +553,7 @@ class AsyncPromptRunsResource:
         return [LlmCall.model_validate(call) for call in response]
 
     async def get_video_result(self, run_id: str, video_id: str) -> PromptRunVideoResult:
-        """Get the video/audio-level synthesis result for one media item in a run."""
+        """Get the grounded video/audio-level extraction result for one media item in a run."""
         response = await self._client.get(f"/prompt-runs/{run_id}/videos/{video_id}/video-result")
         return PromptRunVideoResult.model_validate(response)
 
@@ -573,6 +576,7 @@ class AsyncPromptRunsResource:
         )
         response = await self._client.post(
             f"/prompt-runs/{run_id}/videos/{video_id}/segments/{segment_id}/retry",
+            processing_intent="retry_prompt_run_segment",
             idempotency_key=resolved_idempotency_key,
         )
         return PromptRunSegmentRetry.model_validate(response)

@@ -17,17 +17,18 @@ from .._pagination import (
 )
 from .._types import (
     BatchVideoSegmentsTarget,
+    ImportJob,
     ProcessingStartedResponse,
     PromptRun,
     Segment,
     SignedUrl,
-    UploadResult,
     Video,
     VideoDeletionResponse,
     VideoSegments,
     VideoStatus,
     VideoWithDetails,
 )
+from .import_jobs import _resolve_import_job_idempotency_key
 
 if TYPE_CHECKING:
     from .._http import AsyncHttpClient, SyncHttpClient
@@ -87,7 +88,8 @@ class VideosResource:
         video_uri: str,
         index_id: str,
         source_connector_id: Optional[str] = None,
-    ) -> Video:
+        idempotency_key: Optional[str] = None,
+    ) -> ImportJob:
         """
         Create a video from an existing GCS URI.
 
@@ -100,7 +102,7 @@ class VideosResource:
                 do not require this field.
 
         Returns:
-            Video: Created video object
+            ImportJob: Durable ingestion job
 
         Raises:
             ValidationError: If parameters are invalid
@@ -113,8 +115,12 @@ class VideosResource:
         }
         if source_connector_id is not None:
             payload["source_connector_id"] = source_connector_id
-        response = self._client.post("/videos", json=payload)
-        return Video.model_validate(response)
+        response = self._client.post(
+            "/videos",
+            json=payload,
+            idempotency_key=_resolve_import_job_idempotency_key("create", idempotency_key),
+        )
+        return ImportJob.model_validate(response)
 
     def upload(
         self,
@@ -122,7 +128,8 @@ class VideosResource:
         file: Union[str, Path, BinaryIO],
         title: str,
         index_id: Optional[str] = None,
-    ) -> UploadResult:
+        idempotency_key: Optional[str] = None,
+    ) -> ImportJob:
         """
         Upload a video, audio, or image file.
 
@@ -137,11 +144,12 @@ class VideosResource:
             index_id: Target index ID (None for playground)
 
         Returns:
-            UploadResult: Upload result with video_id and status
+            ImportJob: Durable ingestion job and paginated part outputs
 
         Raises:
             ValidationError: If file format is not supported
         """
+        key = _resolve_import_job_idempotency_key("upload", idempotency_key)
         if isinstance(file, (str, Path)):
             file_path = Path(file)
             with open(file_path, "rb") as f:
@@ -149,16 +157,28 @@ class VideosResource:
                 data: dict[str, Any] = {"title": title}
                 if index_id:
                     data["index_id"] = index_id
-                response = self._client.post("/videos/upload", files=files, data=data)
+                response = self._client.post(
+                    "/videos/upload",
+                    files=files,
+                    data=data,
+                    processing_intent="upload_media",
+                    idempotency_key=key,
+                )
         else:
             filename = getattr(file, "name", "upload")
             files_payload: dict[str, tuple[str, Any]] = {"file": (filename, file)}
             data_payload: dict[str, Any] = {"title": title}
             if index_id:
                 data_payload["index_id"] = index_id
-            response = self._client.post("/videos/upload", files=files_payload, data=data_payload)
+            response = self._client.post(
+                "/videos/upload",
+                files=files_payload,
+                data=data_payload,
+                processing_intent="upload_media",
+                idempotency_key=key,
+            )
 
-        return UploadResult.model_validate(response)
+        return ImportJob.model_validate(response)
 
     def retrieve(self, video_id: str) -> Video:
         """
@@ -224,7 +244,9 @@ class VideosResource:
         params: dict[str, Any] = {"segment_duration": segment_duration}
         if prompt_id:
             params["prompt_id"] = prompt_id
-        response = self._client.post(f"/videos/{video_id}/process", params=params)
+        response = self._client.post(
+            f"/videos/{video_id}/process", params=params, processing_intent="process_media"
+        )
         return ProcessingStartedResponse.model_validate(response)
 
     def list_segments(
@@ -425,7 +447,8 @@ class AsyncVideosResource:
         video_uri: str,
         index_id: str,
         source_connector_id: Optional[str] = None,
-    ) -> Video:
+        idempotency_key: Optional[str] = None,
+    ) -> ImportJob:
         """Create a video from GCS, optionally through an owned connector."""
         payload = {
             "title": title,
@@ -434,8 +457,12 @@ class AsyncVideosResource:
         }
         if source_connector_id is not None:
             payload["source_connector_id"] = source_connector_id
-        response = await self._client.post("/videos", json=payload)
-        return Video.model_validate(response)
+        response = await self._client.post(
+            "/videos",
+            json=payload,
+            idempotency_key=_resolve_import_job_idempotency_key("create", idempotency_key),
+        )
+        return ImportJob.model_validate(response)
 
     async def upload(
         self,
@@ -443,8 +470,10 @@ class AsyncVideosResource:
         file: Union[str, Path, BinaryIO],
         title: str,
         index_id: Optional[str] = None,
-    ) -> UploadResult:
+        idempotency_key: Optional[str] = None,
+    ) -> ImportJob:
         """Upload a video, audio, or image file."""
+        key = _resolve_import_job_idempotency_key("upload", idempotency_key)
         if isinstance(file, (str, Path)):
             file_path = Path(file)
             with open(file_path, "rb") as f:
@@ -452,7 +481,13 @@ class AsyncVideosResource:
                 data: dict[str, Any] = {"title": title}
                 if index_id:
                     data["index_id"] = index_id
-                response = await self._client.post("/videos/upload", files=files, data=data)
+                response = await self._client.post(
+                    "/videos/upload",
+                    files=files,
+                    data=data,
+                    processing_intent="upload_media",
+                    idempotency_key=key,
+                )
         else:
             filename = getattr(file, "name", "upload")
             files_payload: dict[str, tuple[str, Any]] = {"file": (filename, file)}
@@ -463,9 +498,11 @@ class AsyncVideosResource:
                 "/videos/upload",
                 files=files_payload,
                 data=data_payload,
+                processing_intent="upload_media",
+                idempotency_key=key,
             )
 
-        return UploadResult.model_validate(response)
+        return ImportJob.model_validate(response)
 
     async def retrieve(self, video_id: str) -> Video:
         """Retrieve a video by ID."""
@@ -494,7 +531,9 @@ class AsyncVideosResource:
         params: dict[str, Any] = {"segment_duration": segment_duration}
         if prompt_id:
             params["prompt_id"] = prompt_id
-        response = await self._client.post(f"/videos/{video_id}/process", params=params)
+        response = await self._client.post(
+            f"/videos/{video_id}/process", params=params, processing_intent="process_media"
+        )
         return ProcessingStartedResponse.model_validate(response)
 
     async def list_segments(

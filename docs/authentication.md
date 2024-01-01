@@ -121,6 +121,32 @@ use the backend's legacy authenticated-user dependency. Use an API key or
 Firebase ID token for those two calls until that backend boundary is migrated
 to tenant OAuth.
 
+## Authentication and Readiness
+
+Call `client.authenticate()` once when establishing a genuine application
+session or starting a command. With `AsyncVideoVector`, use
+`await client.authenticate()`. It sends the configured credential to
+`POST /auth/processing-activity` on the control service, allowing API and LOW
+processing capacity to start before the first media request.
+
+The return value is the server's readiness acknowledgement. An acknowledgement
+does not mean that instances have finished starting. Invalid credentials or a
+denied identity raise the normal `AuthenticationError` or `AuthorizationError`.
+An unavailable readiness service or network failure returns `None`; this is
+neither authentication proof nor worker readiness proof. The request has no
+automatic retry and uses an HTTP timeout of at most three seconds.
+
+Media uploads, media/prompt execution and explicit segment retries also send
+one advisory processing-intent signal before their normal request. A readiness
+failure does not block that request. Existing business idempotency and retry
+behavior is unchanged; business transport retries do not emit extra activity.
+The server owns event deduplication, coalescing and readiness windows (15 minutes
+for LOW, 30 minutes for API).
+
+Constructors and context managers do not make network requests. Token-provider
+refreshes, resource reads, status polling, imports and search do not renew these
+readiness windows. Do not put `authenticate()` in a polling or refresh loop.
+
 ## Credential Selection
 
 By default, configure exactly one credential source. A static `bearer_token`

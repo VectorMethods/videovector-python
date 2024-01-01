@@ -28,12 +28,6 @@ def main() -> None:
             },
             video_level={
                 "instructions_text": "Assemble the segment evidence into a course outline.",
-                "included_segment_fields": [
-                    "chapter_title",
-                    "learning_objectives",
-                    "procedural_steps",
-                    "quiz_questions",
-                ],
                 "json_schema": {
                     "type": "object",
                     "properties": {

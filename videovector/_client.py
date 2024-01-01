@@ -6,7 +6,7 @@ Main entry point for the VideoVector Python SDK.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from ._config import (
     AsyncOAuthTokenProvider,
@@ -173,6 +173,18 @@ class VideoVector:
         self.api_keys = ApiKeysResource(self._http)
         self.workflow = WorkflowResource(self._http)
 
+    def authenticate(self) -> Optional[Dict[str, Any]]:
+        """Validate credentials and request API/processing readiness once.
+
+        Invalid credentials raise the normal authentication/authorization error.
+        Readiness/network failures return None; an acknowledgement reports the
+        server's admission state, not proof that worker startup has completed.
+        Constructors, token providers and status polling never call this method.
+        """
+        return self._http.record_processing_activity(
+            reason="authentication", raise_auth_errors=True
+        )
+
     def close(self) -> None:
         """Close the HTTP client and release resources."""
         self._http.close()
@@ -303,6 +315,18 @@ class AsyncVideoVector:
         self.webhooks = AsyncWebhooksResource(self._http)
         self.api_keys = AsyncApiKeysResource(self._http)
         self.workflow = AsyncWorkflowResource(self._http)
+
+    async def authenticate(self) -> Optional[Dict[str, Any]]:
+        """Validate credentials and request API/processing readiness once.
+
+        Invalid credentials raise the normal authentication/authorization error.
+        Readiness/network failures return None; an acknowledgement reports the
+        server's admission state, not proof that worker startup has completed.
+        Constructors, token providers and status polling never call this method.
+        """
+        return await self._http.record_processing_activity(
+            reason="authentication", raise_auth_errors=True
+        )
 
     async def close(self) -> None:
         """Close the HTTP client and release resources."""
