@@ -70,7 +70,7 @@ def _fake_bundle(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
         descriptor(sdist, "sdist"),
     ]
     metadata = {
-        "schema_version": "1.0.0",
+        "schema_version": release.SCHEMA_VERSION,
         "package": {"name": "package", "version": "1.0", "requires_python": ">=3.9"},
         "artifacts": [
             {key: descriptor[key] for key in ("filename", "packagetype", "sha256", "size")}
@@ -83,7 +83,7 @@ def _fake_bundle(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
         encoding="utf-8",
     )
     manifest = {
-        "schema_version": "1.0.0",
+        "schema_version": release.SCHEMA_VERSION,
         "package": {"name": "package", "version": "1.0"},
         "repository": "VectorMethods/videovector-python",
         "source_sha": "a" * 40,
@@ -98,9 +98,9 @@ def _fake_bundle(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
         "tool_versions": {
             "python": "3.12.8",
             "build": "1.4.4",
-            "pip": "25.3",
             "setuptools": "80.10.2",
             "twine": "6.2.0",
+            "uv": "0.11.29",
             "wheel": "0.47.0",
         },
     }
@@ -125,6 +125,56 @@ def test_wheel_timestamp_normalization_is_deterministic(tmp_path: Path) -> None:
     release.normalize_wheel(second, 1_700_000_000)
 
     assert first.read_bytes() == second.read_bytes()
+
+
+def test_release_tool_provenance_records_uv_without_requiring_pip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    versions = {
+        "build": "1.4.4",
+        "setuptools": "80.10.2",
+        "twine": "6.2.0",
+        "wheel": "0.47.0",
+    }
+
+    def distribution_version(name: str) -> str:
+        assert name != "pip"
+        return versions[name]
+
+    monkeypatch.setattr(release.importlib_metadata, "version", distribution_version)
+    monkeypatch.setattr(
+        release.shutil, "which", lambda name: "/reviewed/uv" if name == "uv" else None
+    )
+    monkeypatch.setattr(
+        release,
+        "_run",
+        lambda command, **_kwargs: (
+            "uv 0.11.29 (901092ee1 2026-07-15 aarch64-apple-darwin)"
+            if tuple(command) == ("/reviewed/uv", "--version")
+            else pytest.fail(f"unexpected command: {command}")
+        ),
+    )
+
+    assert release._tool_versions() == {
+        "python": release.sys.version.split()[0],
+        **versions,
+        "uv": "0.11.29",
+    }
+
+
+def test_bundle_verification_requires_uv_provenance(tmp_path: Path) -> None:
+    bundle, _metadata = _fake_bundle(tmp_path)
+    manifest_path = bundle / "release-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["tool_versions"]["pip"] = "25.3"
+    del manifest["tool_versions"]["uv"]
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(release.ReleaseArtifactError, match="tool versions are incomplete"):
+        release.verify_bundle(bundle)
 
 
 def test_bundle_verification_fails_closed_after_artifact_tampering(
@@ -302,3 +352,17 @@ def test_release_installs_only_with_the_reviewed_uv_binary() -> None:
     assert workflow.count("python -m venv --without-pip") == 3
     assert "uv pip uninstall" in workflow
     assert "python -m pip --version" in workflow
+
+
+def test_ci_and_release_gate_all_maintained_python_sources() -> None:
+    root = Path(__file__).parents[1]
+    expected_commands = {
+        "ruff check videovector tests examples scripts",
+        "black --check videovector tests examples scripts",
+        "mypy videovector scripts/release_artifacts.py",
+    }
+
+    for workflow_name in ("ci.yml", "release.yml"):
+        workflow = (root / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+        for command in expected_commands:
+            assert command in workflow

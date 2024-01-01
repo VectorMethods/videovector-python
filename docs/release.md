@@ -11,8 +11,9 @@ personal GitHub account, or a manual public workflow dispatch.
    ```bash
    uv pip install --python "$(command -v python)" --require-hashes -r requirements-dev.lock
    uv pip install --python "$(command -v python)" --no-deps --no-build-isolation -e .
-   ruff check videovector tests examples
-   mypy videovector
+   ruff check videovector tests examples scripts
+   black --check videovector tests examples scripts
+   mypy videovector scripts/release_artifacts.py
    pytest -q tests
    python -m build --no-isolation
    python -m twine check dist/*
@@ -31,7 +32,10 @@ The workflow builds the wheel and sdist once from the release tag. Archive
 timestamps are normalized to the source commit timestamp and the complete
 bundle is uploaded between jobs. `release-manifest.json` binds the source and
 tag SHA, canonical source repository, release-body hash, artifact hashes,
-expected registry metadata hash, and exact tool versions.
+expected registry metadata hash, and exact Python, `uv`, build, setuptools,
+wheel, and Twine versions. `pip` is intentionally absent from the release
+environment and provenance because every dependency is installed by the
+checksum-reviewed `uv` binary before artifact construction.
 
 TestPyPI and PyPI publication jobs always download that tested bundle; they
 never rebuild it. A pre-existing version is successful only when its complete

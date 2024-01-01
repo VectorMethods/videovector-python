@@ -45,10 +45,13 @@ jobs:
           fi
 
       - name: Ruff
-        run: ruff check videovector tests examples
+        run: ruff check videovector tests examples scripts
+
+      - name: Black
+        run: black --check videovector tests examples scripts
 
       - name: MyPy
-        run: mypy videovector
+        run: mypy videovector scripts/release_artifacts.py
 
       - name: Pytest
         run: pytest -q tests

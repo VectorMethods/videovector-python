@@ -31,7 +31,7 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path, PurePosixPath
 from typing import IO, Any, Mapping, NoReturn, Sequence, cast
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 DEFAULT_REGISTRY_URLS = {
     "pypi": "https://pypi.org",
@@ -239,13 +239,26 @@ def _artifact_descriptor(path: Path) -> dict[str, Any]:
     }
 
 
+def _uv_version() -> str:
+    executable = shutil.which("uv")
+    if executable is None:
+        return "unavailable"
+    try:
+        output = _run((executable, "--version"), cwd=Path.cwd(), capture=True)
+    except (OSError, subprocess.CalledProcessError):
+        return "unavailable"
+    match = re.fullmatch(r"uv (?P<version>[0-9]+\.[0-9]+\.[0-9]+)(?: .*)?", output)
+    return match.group("version") if match is not None else "unavailable"
+
+
 def _tool_versions() -> dict[str, str]:
     versions = {"python": sys.version.split()[0]}
-    for distribution in ("build", "pip", "setuptools", "twine", "wheel"):
+    for distribution in ("build", "setuptools", "twine", "wheel"):
         try:
             versions[distribution] = importlib_metadata.version(distribution)
         except importlib_metadata.PackageNotFoundError:
             versions[distribution] = "unavailable"
+    versions["uv"] = _uv_version()
     return versions
 
 
@@ -355,7 +368,7 @@ def verify_bundle(
     ):
         raise ReleaseArtifactError("release provenance fields are invalid")
     tool_versions = manifest.get("tool_versions")
-    required_tools = {"python", "build", "pip", "setuptools", "twine", "wheel"}
+    required_tools = {"python", "build", "setuptools", "twine", "uv", "wheel"}
     if (
         not isinstance(tool_versions, Mapping)
         or not required_tools.issubset(tool_versions)

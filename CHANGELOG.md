@@ -17,6 +17,9 @@
   default-header construction.
 - Bounded GCS connector credential files to 64 KiB and snapshot them into
   immutable multipart bytes so idempotent retries replay the exact body.
+- Fixed immutable-release provenance to attest the checksum-reviewed `uv`
+  installer actually used by CI instead of requiring intentionally removed,
+  unused `pip`.
 
 ## 1.1.0
 

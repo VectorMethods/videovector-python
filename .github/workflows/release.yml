@@ -133,8 +133,9 @@ jobs:
       - name: Run release checks
         run: |
           set -euo pipefail
-          ruff check videovector tests examples
-          mypy videovector
+          ruff check videovector tests examples scripts
+          black --check videovector tests examples scripts
+          mypy videovector scripts/release_artifacts.py
           pytest -q tests
 
       - name: Build deterministic release bundle once
