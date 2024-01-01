@@ -24,18 +24,24 @@ import os
 from videovector import VideoVector
 
 with VideoVector(api_key=os.environ["VIDEO_VECTOR_API_KEY"]) as client:
-    index = client.indexes.create(name="Field Review Clips")
-
-    upload = client.videos.upload(
+    upload = client.workflow.upload(
         file="/path/to/video.mp4",
-        title="Store walk-through",
-        index_id=index.index_id,
+        index_name="Field Review Clips",
     )
 
-    results = client.search.text(
-        index_id=index.index_id,
+    prompt = client.workflow.define(
+        "Extract products, sentiment, and visible brand names"
+    )
+    run = client.workflow.process(
+        prompt_id=prompt.prompt_id,
+        video_ids=[upload.video.video_id],
+    )
+    client.workflow.wait_until_searchable(run.run.run_id)
+
+    results = client.workflow.search(
         query="employee restocking shelves near checkout",
-        top_k=10,
+        video_ids=[upload.video.video_id],
+        limit=10,
     )
 
     for result in results:
@@ -77,6 +83,7 @@ idempotency, or other SDK-owned headers.
 
 ## Resource Overview
 
+- `client.workflow`: simplified upload, prompt definition, processing, stable search pagination, and searchable-run polling.
 - `client.videos`: upload, retrieve, process, segments, batch helpers, and playground media.
 - `client.indexes`: index CRUD, paginated index videos, and prompt-run history.
 - `client.prompts`: prompt CRUD, schema validation, usage, video-level synthesis, and semantic indexing config.

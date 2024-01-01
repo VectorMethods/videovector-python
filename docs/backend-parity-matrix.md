@@ -14,6 +14,12 @@ This document maps the Python SDK surface (`videovector`) to backend API endpoin
 
 | SDK Method | HTTP | Endpoint | Response Model | Backend Auth Requirement |
 |---|---|---|---|---|
+| `workflow.upload` | `POST` | `/workflow/upload` | `WorkflowUploadResponse` | `write` |
+| `workflow.define` | `POST` | `/workflow/define` | `WorkflowDefineResponse` | `write` |
+| `workflow.process` | `POST` | `/workflow/process` | `WorkflowProcessResponse` | `write` |
+| `workflow.search` | `POST` | `/workflow/search` | `WorkflowSearchResponse` | `search` |
+| `workflow.search` continuation | `GET` | `/workflow/search/page` | `WorkflowSearchResponse` | `search` |
+| `workflow.wait_until_searchable` | `GET` polling | `/prompt-runs/{run_id}` | `PromptRun` | `read` |
 | `videos.create` | `POST` | `/videos` | `Video` | `write` (optional `source_connector_id` for a caller-owned private GCS import connector) |
 | `videos.upload` | `POST` | `/videos/upload` | `UploadResult` | `write` |
 | `videos.retrieve` | `GET` | `/videos/{video_id}` | `Video` | `read` |

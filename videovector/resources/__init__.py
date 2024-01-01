@@ -12,6 +12,7 @@ from .search import AsyncSearchResource, SearchResource
 from .usage import AsyncUsageResource, UsageResource
 from .videos import AsyncVideosResource, VideosResource
 from .webhooks import AsyncWebhooksResource, WebhooksResource
+from .workflow import AsyncWorkflowResource, WorkflowResource
 
 __all__ = [
     "VideosResource",
@@ -38,4 +39,6 @@ __all__ = [
     "AsyncWebhooksResource",
     "ApiKeysResource",
     "AsyncApiKeysResource",
+    "WorkflowResource",
+    "AsyncWorkflowResource",
 ]

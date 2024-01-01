@@ -11,7 +11,7 @@ import math
 import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any, AsyncIterator, Dict, Iterator, Optional
+from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Tuple
 
 import httpx
 
@@ -26,6 +26,36 @@ from ._exceptions import (
 from ._version import __version__
 
 _DEFAULT_RETRY_AFTER_SECONDS = 60
+
+
+def _multipart_replay_state(
+    files: Optional[Dict[str, Any]],
+) -> Tuple[bool, List[Tuple[Any, int]]]:
+    """Describe how to replay multipart streams without buffering their bytes."""
+    if not files:
+        return True, []
+
+    positions: List[Tuple[Any, int]] = []
+    for raw_part in files.values():
+        part = raw_part[1] if isinstance(raw_part, tuple) and len(raw_part) >= 2 else raw_part
+        if isinstance(part, (bytes, bytearray, memoryview, str)):
+            continue
+        if not hasattr(part, "read"):
+            continue
+        try:
+            if hasattr(part, "seekable") and not part.seekable():
+                return False, []
+            position = int(part.tell())
+            part.seek(position)
+        except (AttributeError, OSError, TypeError, ValueError):
+            return False, []
+        positions.append((part, position))
+    return True, positions
+
+
+def _rewind_multipart_parts(positions: List[Tuple[Any, int]]) -> None:
+    for stream, position in positions:
+        stream.seek(position)
 
 
 def _default_headers_for_config(config: ClientConfig) -> Dict[str, str]:
@@ -80,6 +110,9 @@ class SyncHttpClient:
         """Execute HTTP request with retry logic."""
         normalized_method = method.upper()
         allow_retry = _should_retry_request(normalized_method, idempotency_key)
+        multipart_replayable, multipart_positions = _multipart_replay_state(files)
+        if files and not multipart_replayable:
+            allow_retry = False
 
         request_headers = {}
         if headers:
@@ -95,8 +128,11 @@ class SyncHttpClient:
                 if key.lower() != "content-type"
             }
 
+        # Bytes-only multipart bodies are bounded credential/config payloads and
+        # preserve the established exact-byte replay contract. Seekable media
+        # streams are rewound instead so videos are never buffered in memory.
         multipart_content: Optional[bytes] = None
-        if files and allow_retry:
+        if files and allow_retry and not multipart_positions:
             prepared_request = self._client.build_request(
                 method=method,
                 url=endpoint,
@@ -114,6 +150,8 @@ class SyncHttpClient:
 
         while retry_count <= self._config.max_retries:
             try:
+                if retry_count:
+                    _rewind_multipart_parts(multipart_positions)
                 response = self._client.request(
                     method=method,
                     url=endpoint,
@@ -370,6 +408,9 @@ class AsyncHttpClient:
         """Execute HTTP request with retry logic."""
         normalized_method = method.upper()
         allow_retry = _should_retry_request(normalized_method, idempotency_key)
+        multipart_replayable, multipart_positions = _multipart_replay_state(files)
+        if files and not multipart_replayable:
+            allow_retry = False
 
         client = await self._ensure_client()
 
@@ -387,7 +428,7 @@ class AsyncHttpClient:
             }
 
         multipart_content: Optional[bytes] = None
-        if files and allow_retry:
+        if files and allow_retry and not multipart_positions:
             prepared_request = client.build_request(
                 method=method,
                 url=endpoint,
@@ -405,6 +446,8 @@ class AsyncHttpClient:
 
         while retry_count <= self._config.max_retries:
             try:
+                if retry_count:
+                    _rewind_multipart_parts(multipart_positions)
                 response = await client.request(
                     method=method,
                     url=endpoint,
