@@ -500,7 +500,9 @@ class AsyncVideosResource:
         response = await self._client.post("/videos/signed-url", json={"gcs_uri": gcs_uri})
         return SignedUrl.model_validate(response)
 
-    async def list_prompt_runs(self, video_id: str, *, limit: Optional[int] = None) -> List[PromptRun]:
+    async def list_prompt_runs(
+        self, video_id: str, *, limit: Optional[int] = None
+    ) -> List[PromptRun]:
         """List prompt runs that include a video."""
         params = {"limit": limit} if limit is not None else None
         response = await self._client.get(f"/videos/{video_id}/prompt-runs", params=params)

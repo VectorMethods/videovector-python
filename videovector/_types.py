@@ -61,6 +61,12 @@ class ProcessingModel(str, Enum):
 
 
 class ApiKeyScope(str, Enum):
+    """Tenant API-key scopes.
+
+    ``ADMIN`` grants full access within the owning account only; it never grants
+    VideoVector platform-administrator privileges.
+    """
+
     SEARCH = "search"
     READ = "read"
     WRITE = "write"
@@ -290,7 +296,9 @@ class Prompt(BaseModel):
     prompt_text: str
     json_schema: Dict[str, Any]
     video_level: Optional[PromptVideoLevelConfig] = None
-    semantic_indexing: PromptSemanticIndexingConfig = Field(default_factory=PromptSemanticIndexingConfig)
+    semantic_indexing: PromptSemanticIndexingConfig = Field(
+        default_factory=PromptSemanticIndexingConfig
+    )
     is_active: bool = True
     created_at: str
 

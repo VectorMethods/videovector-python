@@ -79,13 +79,24 @@ Configure one auth mode at a time. If both an API key and bearer token are prese
 - `client.search`: text, image, multimodal, filter, multi-run, and playground search.
 - `client.connectors`: GCS, S3, and Azure connector creation, testing, browsing, and deletion.
 - `client.import_jobs`: bulk import from configured connectors.
-- `client.exports`: index and prompt-run metadata exports.
+- `client.exports`: index and prompt-run metadata exports with bounded authenticated streaming.
 - `client.webhooks`: webhook CRUD, delivery inspection, retries, event discovery, and secret rotation.
 - `client.api_keys`: API key CRUD, rotate, revoke, and delete with bearer auth.
 - `client.usage`: usage metrics, history, details, and breakdowns.
 - `client.rate_limits`: rate-limit status and refresh.
 
 Endpoint-by-endpoint coverage is documented in [docs/backend-parity-matrix.md](docs/backend-parity-matrix.md).
+
+Completed first-party exports can be streamed to disk without buffering the
+file or retrying a partially delivered response:
+
+```python
+export = client.exports.wait_for_completion("export_123")
+client.exports.download(export.export_id, "metadata.json")
+```
+
+Use `iter_download` when your application needs to process chunks directly.
+Connector-delivered exports remain in the configured destination.
 
 ## Pagination
 

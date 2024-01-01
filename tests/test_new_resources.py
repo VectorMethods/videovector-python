@@ -3,13 +3,19 @@ from __future__ import annotations
 import asyncio
 import inspect
 import io
+import threading
+from pathlib import Path
 from typing import Any, Optional, get_args, get_type_hints
 
 import pytest
 
 from videovector._types import FilterCondition
 from videovector.resources.connectors import AsyncConnectorsResource, ConnectorsResource
-from videovector.resources.exports import AsyncExportsResource, ExportsResource
+from videovector.resources.exports import (
+    DEFAULT_EXPORT_DOWNLOAD_MAX_BYTES,
+    AsyncExportsResource,
+    ExportsResource,
+)
 from videovector.resources.import_jobs import AsyncImportJobsResource, ImportJobsResource
 from videovector.resources.indexes import AsyncIndexesResource, IndexesResource
 from videovector.resources.prompt_runs import AsyncPromptRunsResource, PromptRunsResource
@@ -19,6 +25,10 @@ from videovector.resources.search import AsyncSearchResource, SearchResource
 from videovector.resources.usage import AsyncUsageResource, UsageResource
 from videovector.resources.videos import AsyncVideosResource, VideosResource
 from videovector.resources.webhooks import AsyncWebhooksResource, WebhooksResource
+
+
+def test_export_download_default_matches_backend_artifact_ceiling() -> None:
+    assert DEFAULT_EXPORT_DOWNLOAD_MAX_BYTES == 64 * 1024 * 1024
 
 
 def test_filter_search_public_surface_is_canonical_only() -> None:
@@ -246,7 +256,7 @@ def _segment_run_result_payload() -> dict[str, Any]:
         "metadata": {"summary": "demo"},
         "metadata_text": "demo",
         "processing_warning": None,
-        "schema_used": "{\"type\":\"object\"}",
+        "schema_used": '{"type":"object"}',
         "field_extraction_succeeded": True,
         "transcription_succeeded": True,
         "image_embedding_succeeded": None,
@@ -275,7 +285,7 @@ def _prompt_run_video_result_payload() -> dict[str, Any]:
         "metadata_text": "Full video summary",
         "raw_llm_response": "{}",
         "processing_warning": None,
-        "schema_used": "{\"type\":\"object\"}",
+        "schema_used": '{"type":"object"}',
         "successful_segment_count": 8,
         "failed_segment_count": 2,
         "omitted_segment_ids": ["seg_9"],
@@ -472,7 +482,13 @@ class _FakeSyncHttp:
         self.responses = responses
         self.calls: list[dict[str, Any]] = []
 
-    def get(self, endpoint: str, *, params: Optional[dict[str, Any]] = None, headers: Optional[dict[str, str]] = None) -> Any:
+    def get(
+        self,
+        endpoint: str,
+        *,
+        params: Optional[dict[str, Any]] = None,
+        headers: Optional[dict[str, str]] = None,
+    ) -> Any:
         self.calls.append({"method": "GET", "endpoint": endpoint, "params": params})
         return self.responses[("GET", endpoint)]
 
@@ -500,7 +516,13 @@ class _FakeSyncHttp:
         )
         return self.responses[("POST", endpoint)]
 
-    def delete(self, endpoint: str, *, params: Optional[dict[str, Any]] = None, headers: Optional[dict[str, str]] = None) -> Any:
+    def delete(
+        self,
+        endpoint: str,
+        *,
+        params: Optional[dict[str, Any]] = None,
+        headers: Optional[dict[str, str]] = None,
+    ) -> Any:
         self.calls.append({"method": "DELETE", "endpoint": endpoint, "params": params})
         return self.responses[("DELETE", endpoint)]
 
@@ -554,7 +576,13 @@ class _FakeSyncHttp:
 
 
 class _FakeAsyncHttp(_FakeSyncHttp):
-    async def get(self, endpoint: str, *, params: Optional[dict[str, Any]] = None, headers: Optional[dict[str, str]] = None) -> Any:
+    async def get(
+        self,
+        endpoint: str,
+        *,
+        params: Optional[dict[str, Any]] = None,
+        headers: Optional[dict[str, str]] = None,
+    ) -> Any:
         return super().get(endpoint, params=params, headers=headers)
 
     async def post(
@@ -578,7 +606,13 @@ class _FakeAsyncHttp(_FakeSyncHttp):
             idempotency_key=idempotency_key,
         )
 
-    async def delete(self, endpoint: str, *, params: Optional[dict[str, Any]] = None, headers: Optional[dict[str, str]] = None) -> Any:
+    async def delete(
+        self,
+        endpoint: str,
+        *,
+        params: Optional[dict[str, Any]] = None,
+        headers: Optional[dict[str, str]] = None,
+    ) -> Any:
         return super().delete(endpoint, params=params, headers=headers)
 
     async def put(
@@ -817,11 +851,20 @@ def test_prompt_runs_resource_sync() -> None:
                     "completed_at": "2026-01-01T00:00:01Z",
                 }
             ],
-            ("GET", "/prompt-runs/run_1/videos/video_1/video-result"): _prompt_run_video_result_payload(),
+            (
+                "GET",
+                "/prompt-runs/run_1/videos/video_1/video-result",
+            ): _prompt_run_video_result_payload(),
             ("GET", "/prompt-runs/run_1/failed-segments"): _failed_segments_manifest_payload(),
             ("POST", "/prompt-runs/run_1/cancel"): {**_prompt_run_payload(), "status": "cancelled"},
-            ("POST", "/prompt-runs/run_1/videos/video_1/segments/seg_2/retry"): _segment_retry_payload(),
-            ("GET", "/prompt-runs/run_1/videos/video_1/segments/seg_2/retries/retry_1"): _segment_retry_status_payload(),
+            (
+                "POST",
+                "/prompt-runs/run_1/videos/video_1/segments/seg_2/retry",
+            ): _segment_retry_payload(),
+            (
+                "GET",
+                "/prompt-runs/run_1/videos/video_1/segments/seg_2/retries/retry_1",
+            ): _segment_retry_status_payload(),
         }
     )
     resource = PromptRunsResource(http)  # type: ignore[arg-type]
@@ -894,11 +937,20 @@ def test_prompt_runs_resource_async() -> None:
                 "pagination": {"limit": 50, "has_more": False, "next_cursor": None},
             },
             ("GET", "/prompt-runs/run_1/llm-calls"): [],
-            ("GET", "/prompt-runs/run_1/videos/video_1/video-result"): _prompt_run_video_result_payload(),
+            (
+                "GET",
+                "/prompt-runs/run_1/videos/video_1/video-result",
+            ): _prompt_run_video_result_payload(),
             ("GET", "/prompt-runs/run_1/failed-segments"): _failed_segments_manifest_payload(),
             ("POST", "/prompt-runs/run_1/cancel"): {**_prompt_run_payload(), "status": "cancelled"},
-            ("POST", "/prompt-runs/run_1/videos/video_1/segments/seg_2/retry"): _segment_retry_payload(),
-            ("GET", "/prompt-runs/run_1/videos/video_1/segments/seg_2/retries/retry_1"): _segment_retry_status_payload(),
+            (
+                "POST",
+                "/prompt-runs/run_1/videos/video_1/segments/seg_2/retry",
+            ): _segment_retry_payload(),
+            (
+                "GET",
+                "/prompt-runs/run_1/videos/video_1/segments/seg_2/retries/retry_1",
+            ): _segment_retry_status_payload(),
         }
     )
     resource = AsyncPromptRunsResource(http)  # type: ignore[arg-type]
@@ -939,7 +991,9 @@ def test_prompt_runs_resource_async() -> None:
         assert retry.billing_status == "pending"
         assert http.calls[8]["idempotency_key"].startswith("prompt-run-segment-retry:")
 
-        retry_status = await resource.get_segment_retry_status("run_1", "video_1", "seg_2", "retry_1")
+        retry_status = await resource.get_segment_retry_status(
+            "run_1", "video_1", "seg_2", "retry_1"
+        )
         assert retry_status.status == "completed"
         assert retry_status.billing_status == "confirmed"
 
@@ -1014,8 +1068,6 @@ def test_prompt_runs_resource_sync_validates_non_empty_video_targets() -> None:
     assert http.calls == []
 
 
-
-
 def test_videos_prompt_runs_and_playground_sync() -> None:
     http = _FakeSyncHttp(
         {
@@ -1043,7 +1095,9 @@ def test_videos_prompt_runs_and_playground_sync() -> None:
     assert page.data[0].processing_status[0].video_level.attempt_id == "attempt_1"
 
 
-def test_videos_create_sync_adds_optional_source_connector_without_breaking_legacy_payload() -> None:
+def test_videos_create_sync_adds_optional_source_connector_without_breaking_legacy_payload() -> (
+    None
+):
     http = _FakeSyncHttp({("POST", "/videos"): _video_payload()})
     resource = VideosResource(http)  # type: ignore[arg-type]
 
@@ -1111,7 +1165,9 @@ def test_videos_prompt_runs_and_playground_async() -> None:
     asyncio.run(_run())
 
 
-def test_videos_create_async_adds_optional_source_connector_without_breaking_legacy_payload() -> None:
+def test_videos_create_async_adds_optional_source_connector_without_breaking_legacy_payload() -> (
+    None
+):
     http = _FakeAsyncHttp({("POST", "/videos"): _video_payload()})
     resource = AsyncVideosResource(http)  # type: ignore[arg-type]
 
@@ -1467,6 +1523,155 @@ def test_connectors_and_exports_async() -> None:
         assert http.calls[4]["idempotency_key"].startswith("export-create:")
 
     asyncio.run(_run())
+
+
+class _StreamingSyncHttp:
+    def __init__(self, chunks: list[bytes], *, fail_after: Optional[int] = None) -> None:
+        self.chunks = chunks
+        self.fail_after = fail_after
+        self.calls: list[dict[str, Any]] = []
+
+    def iter_bytes(
+        self,
+        endpoint: str,
+        *,
+        chunk_size: int,
+        max_bytes: int,
+    ) -> Any:
+        self.calls.append(
+            {
+                "endpoint": endpoint,
+                "chunk_size": chunk_size,
+                "max_bytes": max_bytes,
+            }
+        )
+        for index, chunk in enumerate(self.chunks):
+            if self.fail_after is not None and index >= self.fail_after:
+                raise RuntimeError("interrupted")
+            yield chunk
+
+
+class _StreamingAsyncHttp:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self.chunks = chunks
+        self.calls: list[dict[str, Any]] = []
+
+    async def iter_bytes(
+        self,
+        endpoint: str,
+        *,
+        chunk_size: int,
+        max_bytes: int,
+    ) -> Any:
+        self.calls.append(
+            {
+                "endpoint": endpoint,
+                "chunk_size": chunk_size,
+                "max_bytes": max_bytes,
+            }
+        )
+        for chunk in self.chunks:
+            yield chunk
+
+
+def test_exports_download_streams_to_atomic_path(tmp_path: Path) -> None:
+    http = _StreamingSyncHttp([b'{"a":', b"1}"])
+    exports = ExportsResource(http)  # type: ignore[arg-type]
+    destination = tmp_path / "export.json"
+
+    written = exports.download(
+        "exp_1",
+        destination,
+        chunk_size=7,
+        max_bytes=100,
+    )
+
+    assert written == 7
+    assert destination.read_bytes() == b'{"a":1}'
+    assert list(tmp_path.glob("*.part")) == []
+    assert http.calls == [
+        {
+            "endpoint": "/exports/exp_1/download",
+            "chunk_size": 7,
+            "max_bytes": 100,
+        }
+    ]
+
+
+def test_exports_download_interruption_preserves_existing_destination(tmp_path: Path) -> None:
+    http = _StreamingSyncHttp([b"partial", b"never"], fail_after=1)
+    exports = ExportsResource(http)  # type: ignore[arg-type]
+    destination = tmp_path / "export.json"
+    destination.write_bytes(b"existing")
+
+    with pytest.raises(RuntimeError, match="interrupted"):
+        exports.download("exp_1", destination)
+
+    assert destination.read_bytes() == b"existing"
+    assert list(tmp_path.glob("*.part")) == []
+
+
+def test_exports_download_async_streams_without_buffering(tmp_path: Path) -> None:
+    http = _StreamingAsyncHttp([b"first", b"-second"])
+    exports = AsyncExportsResource(http)  # type: ignore[arg-type]
+    destination = tmp_path / "async-export.json"
+
+    async def _run() -> int:
+        return await exports.download(
+            "exp_async",
+            destination,
+            chunk_size=11,
+            max_bytes=200,
+        )
+
+    assert asyncio.run(_run()) == 12
+    assert destination.read_bytes() == b"first-second"
+    assert http.calls == [
+        {
+            "endpoint": "/exports/exp_async/download",
+            "chunk_size": 11,
+            "max_bytes": 200,
+        }
+    ]
+
+
+def test_exports_download_async_cancellation_during_open_closes_handle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    http = _StreamingAsyncHttp([b"should-not-start"])
+    exports = AsyncExportsResource(http)  # type: ignore[arg-type]
+    destination = tmp_path / "async-export.json"
+    destination.write_bytes(b"existing")
+    open_started = threading.Event()
+    allow_open = threading.Event()
+    opened_handle = io.BytesIO()
+    original_open = Path.open
+
+    def delayed_open(path: Path, *args: Any, **kwargs: Any) -> Any:
+        if path.suffix == ".part":
+            open_started.set()
+            assert allow_open.wait(timeout=5)
+            return opened_handle
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", delayed_open)
+
+    async def _run() -> None:
+        task = asyncio.create_task(exports.download("exp_async", destination))
+        assert await asyncio.to_thread(open_started.wait, 5)
+        task.cancel()
+        await asyncio.sleep(0)
+        allow_open.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(_run())
+
+    assert opened_handle.closed
+    assert destination.read_bytes() == b"existing"
+    assert list(tmp_path.glob("*.part")) == []
+    assert http.calls == []
 
 
 def test_import_jobs_idempotency_sync() -> None:

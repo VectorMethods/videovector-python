@@ -25,7 +25,7 @@ class ApiKeysResource:
 
     Example:
         # Using JWT authentication
-        client = VideoVector(api_key="jwt_token_here")
+        client = VideoVector(bearer_token="firebase_jwt_here")
 
         # Create an API key with read scope
         key = client.api_keys.create(
@@ -59,7 +59,9 @@ class ApiKeysResource:
 
         Args:
             name: Key name (1-100 characters)
-            scopes: Permission scopes (search, read, write, admin)
+            scopes: Permission scopes (search, read, write, admin). The admin
+                scope grants full access within the owning account only and
+                never grants platform-administrator privileges.
                 Default: ["read"]
             expires_in_days: Days until expiration (1-365)
                 None = never expires
@@ -167,7 +169,7 @@ class AsyncApiKeysResource:
     Provides async methods for API key management.
 
     Example:
-        async with AsyncVideoVector(api_key="jwt_token") as client:
+        async with AsyncVideoVector(bearer_token="firebase_jwt_here") as client:
             key = await client.api_keys.create(
                 name="Production Key",
                 scopes=["read", "search"]

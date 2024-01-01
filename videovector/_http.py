@@ -7,7 +7,7 @@ Low-level HTTP client with retry logic, authentication, and error handling.
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Optional
+from typing import Any, AsyncIterator, Dict, Iterator, Optional
 
 import httpx
 
@@ -114,7 +114,7 @@ class SyncHttpClient:
                     and retry_count < self._config.max_retries
                 ):
                     retry_count += 1
-                    time.sleep(2 ** retry_count)
+                    time.sleep(2**retry_count)
                     continue
 
                 if response.status_code >= 400:
@@ -133,7 +133,7 @@ class SyncHttpClient:
                 last_exception = TimeoutError(f"Request timed out: {e}")
                 if allow_retry and retry_count < self._config.max_retries:
                     retry_count += 1
-                    time.sleep(2 ** retry_count)
+                    time.sleep(2**retry_count)
                     continue
                 raise last_exception
 
@@ -141,7 +141,7 @@ class SyncHttpClient:
                 last_exception = ConnectionError(f"Connection failed: {e}")
                 if allow_retry and retry_count < self._config.max_retries:
                     retry_count += 1
-                    time.sleep(2 ** retry_count)
+                    time.sleep(2**retry_count)
                     continue
                 raise last_exception
 
@@ -152,7 +152,7 @@ class SyncHttpClient:
                 last_exception = VideoVectorError(f"Request failed: {e}")
                 if allow_retry and retry_count < self._config.max_retries:
                     retry_count += 1
-                    time.sleep(2 ** retry_count)
+                    time.sleep(2**retry_count)
                     continue
                 raise last_exception
 
@@ -169,6 +169,62 @@ class SyncHttpClient:
     ) -> Any:
         """Execute GET request."""
         return self._request("GET", endpoint, params=params, headers=headers)
+
+    def iter_bytes(
+        self,
+        endpoint: str,
+        *,
+        headers: Optional[Dict[str, str]] = None,
+        chunk_size: int = 1024 * 1024,
+        max_bytes: int,
+    ) -> Iterator[bytes]:
+        """Stream a response body exactly once without JSON decoding or retries."""
+        _validate_stream_limits(chunk_size=chunk_size, max_bytes=max_bytes)
+
+        try:
+            with self._client.stream(
+                method="GET",
+                url=endpoint,
+                headers=headers,
+            ) as response:
+                if response.status_code != 200:
+                    response.read()
+                    if response.status_code < 400:
+                        raise VideoVectorError(
+                            "Download did not return a complete response",
+                            status_code=response.status_code,
+                            error_code="unexpected_download_status",
+                        )
+                    _raise_stream_error(response)
+                expected_length = _validate_download_response_headers(
+                    response,
+                    max_bytes=max_bytes,
+                )
+
+                total = 0
+                for chunk in response.iter_bytes(chunk_size=chunk_size):
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise VideoVectorError(
+                            "Download exceeded the configured byte limit",
+                            error_code="download_size_limit_exceeded",
+                            details={"max_bytes": max_bytes},
+                        )
+                    yield chunk
+                _validate_streamed_length(
+                    expected_length=expected_length,
+                    actual_length=total,
+                )
+        except httpx.TimeoutException as exc:
+            raise TimeoutError(f"Download timed out: {exc}") from exc
+        except httpx.ConnectError as exc:
+            raise ConnectionError(f"Download connection failed: {exc}") from exc
+        except (RateLimitError, VideoVectorError):
+            raise
+        except httpx.HTTPError as exc:
+            raise ConnectionError(f"Download failed: {exc}") from exc
 
     def post(
         self,
@@ -346,7 +402,7 @@ class AsyncHttpClient:
                     and retry_count < self._config.max_retries
                 ):
                     retry_count += 1
-                    await asyncio.sleep(2 ** retry_count)
+                    await asyncio.sleep(2**retry_count)
                     continue
 
                 if response.status_code >= 400:
@@ -365,7 +421,7 @@ class AsyncHttpClient:
                 last_exception = TimeoutError(f"Request timed out: {e}")
                 if allow_retry and retry_count < self._config.max_retries:
                     retry_count += 1
-                    await asyncio.sleep(2 ** retry_count)
+                    await asyncio.sleep(2**retry_count)
                     continue
                 raise last_exception
 
@@ -373,7 +429,7 @@ class AsyncHttpClient:
                 last_exception = ConnectionError(f"Connection failed: {e}")
                 if allow_retry and retry_count < self._config.max_retries:
                     retry_count += 1
-                    await asyncio.sleep(2 ** retry_count)
+                    await asyncio.sleep(2**retry_count)
                     continue
                 raise last_exception
 
@@ -384,7 +440,7 @@ class AsyncHttpClient:
                 last_exception = VideoVectorError(f"Request failed: {e}")
                 if allow_retry and retry_count < self._config.max_retries:
                     retry_count += 1
-                    await asyncio.sleep(2 ** retry_count)
+                    await asyncio.sleep(2**retry_count)
                     continue
                 raise last_exception
 
@@ -401,6 +457,63 @@ class AsyncHttpClient:
     ) -> Any:
         """Execute GET request."""
         return await self._request("GET", endpoint, params=params, headers=headers)
+
+    async def iter_bytes(
+        self,
+        endpoint: str,
+        *,
+        headers: Optional[Dict[str, str]] = None,
+        chunk_size: int = 1024 * 1024,
+        max_bytes: int,
+    ) -> AsyncIterator[bytes]:
+        """Stream a response body exactly once without JSON decoding or retries."""
+        _validate_stream_limits(chunk_size=chunk_size, max_bytes=max_bytes)
+        client = await self._ensure_client()
+
+        try:
+            async with client.stream(
+                method="GET",
+                url=endpoint,
+                headers=headers,
+            ) as response:
+                if response.status_code != 200:
+                    await response.aread()
+                    if response.status_code < 400:
+                        raise VideoVectorError(
+                            "Download did not return a complete response",
+                            status_code=response.status_code,
+                            error_code="unexpected_download_status",
+                        )
+                    _raise_stream_error(response)
+                expected_length = _validate_download_response_headers(
+                    response,
+                    max_bytes=max_bytes,
+                )
+
+                total = 0
+                async for chunk in response.aiter_bytes(chunk_size=chunk_size):
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise VideoVectorError(
+                            "Download exceeded the configured byte limit",
+                            error_code="download_size_limit_exceeded",
+                            details={"max_bytes": max_bytes},
+                        )
+                    yield chunk
+                _validate_streamed_length(
+                    expected_length=expected_length,
+                    actual_length=total,
+                )
+        except httpx.TimeoutException as exc:
+            raise TimeoutError(f"Download timed out: {exc}") from exc
+        except httpx.ConnectError as exc:
+            raise ConnectionError(f"Download connection failed: {exc}") from exc
+        except (RateLimitError, VideoVectorError):
+            raise
+        except httpx.HTTPError as exc:
+            raise ConnectionError(f"Download failed: {exc}") from exc
 
     async def post(
         self,
@@ -507,6 +620,91 @@ def _raise_rate_limit_response(response: httpx.Response, *, retry_after: int) ->
         status_code=429,
         retry_after=retry_after,
     )
+
+
+def _validate_stream_limits(*, chunk_size: int, max_bytes: int) -> None:
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be greater than zero")
+    if max_bytes <= 0:
+        raise ValueError("max_bytes must be greater than zero")
+
+
+def _validate_download_response_headers(
+    response: httpx.Response,
+    *,
+    max_bytes: int,
+) -> int:
+    content_type = response.headers.get("content-type", "")
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    if media_type != "application/json":
+        raise VideoVectorError(
+            "Download returned an unexpected content type",
+            error_code="unexpected_download_content_type",
+            details={"content_type": content_type or None},
+        )
+    content_encoding = response.headers.get("content-encoding", "").strip().lower()
+    if content_encoding not in {"", "identity"}:
+        raise VideoVectorError(
+            "Download returned an unexpected content encoding",
+            error_code="unexpected_download_content_encoding",
+            details={"content_encoding": content_encoding},
+        )
+
+    raw_content_length = response.headers.get("content-length")
+    if raw_content_length is None:
+        raise VideoVectorError(
+            "Download response did not declare its byte length",
+            error_code="missing_download_content_length",
+        )
+    try:
+        content_length = int(raw_content_length)
+    except (TypeError, ValueError) as exc:
+        raise VideoVectorError(
+            "Download returned an invalid Content-Length",
+            error_code="invalid_download_content_length",
+        ) from exc
+    if content_length <= 0:
+        raise VideoVectorError(
+            "Download returned an invalid Content-Length",
+            error_code="invalid_download_content_length",
+        )
+    if content_length > max_bytes:
+        raise VideoVectorError(
+            "Download exceeds the configured byte limit",
+            error_code="download_size_limit_exceeded",
+            details={"content_length": content_length, "max_bytes": max_bytes},
+        )
+    return content_length
+
+
+def _validate_streamed_length(
+    *,
+    expected_length: int,
+    actual_length: int,
+) -> None:
+    if actual_length != expected_length:
+        raise VideoVectorError(
+            "Download body length did not match the declared response length",
+            error_code="download_incomplete",
+            details={
+                "expected_bytes": expected_length,
+                "received_bytes": actual_length,
+            },
+        )
+
+
+def _raise_stream_error(response: httpx.Response) -> None:
+    if response.status_code == 429:
+        _raise_rate_limit_response(
+            response,
+            retry_after=_get_retry_after(response),
+        )
+    try:
+        parsed_body = response.json()
+        body = parsed_body if isinstance(parsed_body, dict) else {"message": response.text}
+    except Exception:
+        body = {"message": response.text or "Download request failed"}
+    _raise_for_status(response.status_code, body)
 
 
 def _clean_params(params: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

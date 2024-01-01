@@ -42,13 +42,10 @@ class ClientConfig:
         if self.auth_mode is None:
             if self.api_key and self.bearer_token:
                 raise ValueError(
-                    "Provide only one authentication method. "
-                    "Set either api_key or bearer_token."
+                    "Provide only one authentication method; set either api_key or bearer_token."
                 )
             if not self.api_key and not self.bearer_token:
-                raise ValueError(
-                    "Authentication is required. Provide api_key or bearer_token."
-                )
+                raise ValueError("Authentication is required. Provide api_key or bearer_token.")
 
         if self.timeout <= 0:
             raise ValueError("timeout must be greater than 0.")
@@ -76,9 +73,19 @@ class ClientConfig:
             VIDEO_VECTOR_TIMEOUT: Request timeout in seconds (default: 60)
             VIDEO_VECTOR_MAX_RETRIES: Maximum retry attempts (default: 3)
         """
-        resolved_api_key = api_key or os.environ.get("VIDEO_VECTOR_API_KEY")
-        resolved_bearer_token = bearer_token or os.environ.get("VIDEO_VECTOR_BEARER_TOKEN")
-        resolved_auth_mode_raw = auth_mode or os.environ.get("VIDEO_VECTOR_AUTH_MODE")
+        explicit_credentials = api_key is not None or bearer_token is not None
+        resolved_auth_mode_raw: Optional[str]
+        if explicit_credentials:
+            # Explicit constructor credentials are one coherent authentication
+            # choice. Do not combine them with an unrelated ambient credential
+            # or auth mode from the process environment.
+            resolved_api_key = api_key
+            resolved_bearer_token = bearer_token
+            resolved_auth_mode_raw = auth_mode
+        else:
+            resolved_api_key = os.environ.get("VIDEO_VECTOR_API_KEY")
+            resolved_bearer_token = os.environ.get("VIDEO_VECTOR_BEARER_TOKEN")
+            resolved_auth_mode_raw = auth_mode or os.environ.get("VIDEO_VECTOR_AUTH_MODE")
         if resolved_auth_mode_raw not in (None, "api_key", "bearer"):
             raise ValueError(
                 "VIDEO_VECTOR_AUTH_MODE must be either 'api_key' or 'bearer' when set."
@@ -87,11 +94,7 @@ class ClientConfig:
             cast(AuthMode, resolved_auth_mode_raw) if resolved_auth_mode_raw is not None else None
         )
 
-        resolved_base_url = (
-            base_url
-            or os.environ.get("VIDEO_VECTOR_BASE_URL")
-            or DEFAULT_BASE_URL
-        )
+        resolved_base_url = base_url or os.environ.get("VIDEO_VECTOR_BASE_URL") or DEFAULT_BASE_URL
 
         resolved_timeout = timeout
         if resolved_timeout is None:

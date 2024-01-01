@@ -71,6 +71,7 @@ This document maps the Python SDK surface (`videovector`) to backend API endpoin
 | `exports.create_prompt_run_export` | `POST` | `/exports/prompt-run/{run_id}` | `ExportCreateResult` | `write` |
 | `exports.retrieve` | `GET` | `/exports/{export_id}` | `Export` | `read` |
 | `exports.list` | `GET` | `/exports` | `List[Export]` | `read` |
+| `exports.iter_download` / `exports.download` | `GET` | `/exports/{export_id}/download` | bounded byte stream | `read` |
 | `webhooks.create` | `POST` | `/webhooks` | `WebhookWithSecret` | `write` |
 | `webhooks.retrieve` | `GET` | `/webhooks/{webhook_id}` | `Webhook` | `read` |
 | `webhooks.list` | `GET` | `/webhooks` | `List[Webhook]` | `read` |
@@ -119,4 +120,5 @@ The following backend surfaces are intentionally out of scope for this SDK relea
 
 - Endpoint auth requirements are enforced by backend middleware and should be treated as authoritative.
 - Some endpoints are authenticated via either API key or JWT bearer, while `/api-keys/*` requires JWT bearer specifically.
+- The public `admin` API-key scope means full access within the owning account; it never grants platform-administrator access.
 - Omitting `source_connector_id` from `videos.create` preserves the original wire payload and remains the correct call for public GCS objects and server-managed uploads/imports.
