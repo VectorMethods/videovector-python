@@ -1,4 +1,3 @@
-
 from pathlib import Path
 
 import pytest
@@ -6,9 +5,7 @@ import pytest
 from videovector._config import DEFAULT_BASE_URL, ClientConfig
 
 CANONICAL_BASE_URL = "https://api.vectormethods.com/api/v2"
-LEGACY_RAW_STAGE_BASE_URL = (
-    "https://playground-" + "api-stg-" + "udk7d32fva-uc.a.run.app/api/v2"
-)
+LEGACY_RAW_STAGE_BASE_URL = "https://playground-" + "api-stg-" + "udk7d32fva-uc.a.run.app/api/v2"
 
 
 def test_config_accepts_api_key() -> None:

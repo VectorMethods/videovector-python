@@ -26,7 +26,9 @@ if TYPE_CHECKING:
 
 
 def _normalize_video_level(
-    video_level: Optional[Union[PromptVideoLevelConfig, PromptVideoLevelConfigInput, Dict[str, Any]]]
+    video_level: Optional[
+        Union[PromptVideoLevelConfig, PromptVideoLevelConfigInput, Dict[str, Any]]
+    ],
 ) -> Optional[Dict[str, Any]]:
     if video_level is None:
         return None
@@ -38,7 +40,7 @@ def _normalize_video_level(
 def _normalize_semantic_indexing(
     semantic_indexing: Optional[
         Union[PromptSemanticIndexingConfig, PromptSemanticIndexingConfigInput, Dict[str, Any]]
-    ]
+    ],
 ) -> Optional[Dict[str, Any]]:
     if semantic_indexing is None:
         return None

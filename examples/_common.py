@@ -44,4 +44,3 @@ def print_results(rows: Iterable[object], limit: int = 5) -> None:
         if index >= limit:
             break
         print(row)
-

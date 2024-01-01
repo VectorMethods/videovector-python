@@ -33,9 +33,7 @@ if TYPE_CHECKING:
 _TERMINAL_PROMPT_RUN_STATUSES = {"completed", "completed_with_failures", "failed", "cancelled"}
 
 
-def _resolve_generated_idempotency_key(
-    operation: str, idempotency_key: Optional[str]
-) -> str:
+def _resolve_generated_idempotency_key(operation: str, idempotency_key: Optional[str]) -> str:
     """Ensure retry-safe prompt-run POST calls always include an idempotency key."""
     candidate = (idempotency_key or "").strip()
     if candidate:
@@ -77,7 +75,9 @@ def _validate_prompt_run_target(target: ExecutePromptTarget) -> None:
     if target_type == "videos":
         video_ids = target.get("video_ids")
         if not isinstance(video_ids, list) or len(video_ids) == 0:
-            raise ValueError("target.video_ids must be a non-empty array when target.type is 'videos'")
+            raise ValueError(
+                "target.video_ids must be a non-empty array when target.type is 'videos'"
+            )
         if any(not isinstance(video_id, str) or not video_id.strip() for video_id in video_ids):
             raise ValueError("target.video_ids must contain non-empty strings")
 
@@ -113,9 +113,13 @@ def _build_prompt_run_request_body(
     _validate_segment_duration("audio_segment_duration", audio_segment_duration)
 
     if video_segmentation_type == "fixed" and video_segment_duration is None:
-        raise ValueError("video_segment_duration is required when video_segmentation_type is 'fixed'")
+        raise ValueError(
+            "video_segment_duration is required when video_segmentation_type is 'fixed'"
+        )
     if audio_segmentation_type == "fixed" and audio_segment_duration is None:
-        raise ValueError("audio_segment_duration is required when audio_segmentation_type is 'fixed'")
+        raise ValueError(
+            "audio_segment_duration is required when audio_segmentation_type is 'fixed'"
+        )
 
     body: Dict[str, Any] = {
         "prompt_id": prompt_id,
@@ -341,7 +345,9 @@ class PromptRunsResource:
         idempotency_key: Optional[str] = None,
     ) -> PromptRunSegmentRetry:
         """Dispatch a retry for a failed segment inside a prompt run."""
-        resolved_idempotency_key = _resolve_generated_idempotency_key("segment-retry", idempotency_key)
+        resolved_idempotency_key = _resolve_generated_idempotency_key(
+            "segment-retry", idempotency_key
+        )
         response = self._client.post(
             f"/prompt-runs/{run_id}/videos/{video_id}/segments/{segment_id}/retry",
             idempotency_key=resolved_idempotency_key,
@@ -562,7 +568,9 @@ class AsyncPromptRunsResource:
         idempotency_key: Optional[str] = None,
     ) -> PromptRunSegmentRetry:
         """Dispatch a retry for a failed segment inside a prompt run."""
-        resolved_idempotency_key = _resolve_generated_idempotency_key("segment-retry", idempotency_key)
+        resolved_idempotency_key = _resolve_generated_idempotency_key(
+            "segment-retry", idempotency_key
+        )
         response = await self._client.post(
             f"/prompt-runs/{run_id}/videos/{video_id}/segments/{segment_id}/retry",
             idempotency_key=resolved_idempotency_key,

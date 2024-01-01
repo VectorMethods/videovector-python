@@ -99,7 +99,9 @@ def _validate_filter_value_type(value_type: str, operator: str, value: Any, inde
         if operator == "item_contains" and not isinstance(value, str):
             raise ValueError(f"{prefix}: value for operator 'item_contains' must be a string")
         if operator == "item_equals" and (
-            value is None or isinstance(value, (list, dict)) or not isinstance(value, (str, int, float, bool))
+            value is None
+            or isinstance(value, (list, dict))
+            or not isinstance(value, (str, int, float, bool))
         ):
             raise ValueError(
                 f"{prefix}: value for operator 'item_equals' must be a string, number, or boolean"
@@ -148,7 +150,9 @@ def _validate_filter_condition(condition: object, index: int) -> FilterCondition
 
     if operator in _VALUELESS_FILTER_OPERATORS:
         if "value" in condition:
-            raise ValueError(f"Condition {index + 1}: operator '{operator}' does not accept a value")
+            raise ValueError(
+                f"Condition {index + 1}: operator '{operator}' does not accept a value"
+            )
         return {"field": field.strip(), "operator": validated_operator, "type": validated_type}
 
     if not _has_filter_value(condition.get("value")):
@@ -168,7 +172,9 @@ def _validate_filter_conditions(conditions: List[FilterCondition]) -> List[Filte
         raise ValueError("conditions must be a list")
     if not conditions or len(conditions) > _MAX_FILTER_CONDITIONS:
         raise ValueError(f"conditions must contain 1-{_MAX_FILTER_CONDITIONS} items")
-    return [_validate_filter_condition(condition, index) for index, condition in enumerate(conditions)]
+    return [
+        _validate_filter_condition(condition, index) for index, condition in enumerate(conditions)
+    ]
 
 
 def _build_filter_search_body(

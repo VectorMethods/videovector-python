@@ -235,7 +235,9 @@ class WebhooksResource:
         response = self._client.post(f"/webhooks/{webhook_id}/rotate-secret")
         return RotateSecretResponse.model_validate(response)
 
-    def test(self, webhook_id: str, *, idempotency_key: Optional[str] = None) -> WebhookTestResponse:
+    def test(
+        self, webhook_id: str, *, idempotency_key: Optional[str] = None
+    ) -> WebhookTestResponse:
         """
         Send a test event to the webhook.
 
@@ -418,7 +420,9 @@ class AsyncWebhooksResource:
         response = await self._client.post(f"/webhooks/{webhook_id}/rotate-secret")
         return RotateSecretResponse.model_validate(response)
 
-    async def test(self, webhook_id: str, *, idempotency_key: Optional[str] = None) -> WebhookTestResponse:
+    async def test(
+        self, webhook_id: str, *, idempotency_key: Optional[str] = None
+    ) -> WebhookTestResponse:
         """Send a test event to the webhook."""
         response = await self._client.post(
             f"/webhooks/{webhook_id}/test",

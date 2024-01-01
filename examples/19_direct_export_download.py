@@ -8,9 +8,7 @@ from _common import api_client, idempotency_key, optional_env, require_env
 
 
 def main() -> None:
-    destination = Path(
-        optional_env("VIDEO_VECTOR_EXPORT_DESTINATION", "videovector-export.json")
-    )
+    destination = Path(optional_env("VIDEO_VECTOR_EXPORT_DESTINATION", "videovector-export.json"))
     with api_client() as client:
         created = client.exports.create_prompt_run_export(
             run_id=require_env("VIDEO_VECTOR_RUN_ID"),
