@@ -83,7 +83,7 @@ analysis = client.workflow.analyze(
 status = client.workflow.get_analysis(analysis.analysis_id)
 ```
 
-`workflow.upload(file="/path/to/video.mp4")` uses the same direct storage transfer.
+`workflow.upload(file="/path/to/video.mp4")` and `videos.upload(file="/path/to/video.mp4", title="Clip")` use the same direct storage transfer.
 `workflow.upload_files(["/path/to/video.mp4", "/path/to/audio.mp3"])` sends up to
 eight local files through resumable storage sessions with three concurrent
 transfers and bounded chunks. It returns the same asynchronous import-job type.

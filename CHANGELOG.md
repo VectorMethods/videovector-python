@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.1.1
+
+- Route synchronous and asynchronous `videos.upload()` through the shared workflow upload implementation. Local paths now use native resumable storage uploads; file objects retain streaming multipart transfer without duplicated upload logic.
+
 ## 2.1.0
 
 - Import public HTTPS media and individual YouTube URLs through the existing durable import lifecycle.
