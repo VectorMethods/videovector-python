@@ -1,6 +1,7 @@
 # Release Process
 
-Releases are tag-driven.
+Releases are automation-driven from the public repository. Do not create or push
+release tags from a personal workstation or personal GitHub account.
 
 1. Update `videovector/_version.py`, `pyproject.toml`, and `CHANGELOG.md`.
 2. Run local checks:
@@ -13,14 +14,13 @@ Releases are tag-driven.
    python -m twine check dist/*
    ```
 
-3. Create and push a release tag:
+3. Dispatch the `Release` workflow from GitHub Actions with the exact version,
+   for example `1.0.1`.
 
-   ```bash
-   git tag videovector-vX.Y.Z
-   git push origin videovector-vX.Y.Z
-   ```
+4. The workflow verifies the version metadata, builds artifacts, publishes to
+   TestPyPI, smoke-installs from TestPyPI, publishes to PyPI through trusted
+   publishing, then creates the `videovector-vX.Y.Z` GitHub release tag.
 
-4. GitHub Actions builds, publishes to TestPyPI, smoke-installs from TestPyPI, then publishes to PyPI through trusted publishing.
-
-The package should use GitHub OIDC trusted publishing. Do not store long-lived PyPI API tokens in repository secrets.
-
+The package must use GitHub OIDC trusted publishing. Do not store long-lived
+PyPI API tokens in repository secrets. The trusted publishers should target
+`.github/workflows/release.yml` with the `testpypi` and `pypi` environments.
