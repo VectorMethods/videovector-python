@@ -619,6 +619,7 @@ class ImageSearchResult(SearchResult):
     """Image similarity search result."""
 
     matched_image_uri: Optional[str] = None
+    matched_image_gcs_uri: Optional[str] = None
     matched_image_timestamp: Optional[float] = None
     matched_image_score: Optional[float] = None
     shot_timestamp: Optional[float] = None
@@ -634,6 +635,7 @@ class MultimodalSearchResult(SearchResult):
     image_rank: Optional[int] = None
     match_type: str  # "both", "text_only", "image_only"
     matched_image_uri: Optional[str] = None
+    matched_image_gcs_uri: Optional[str] = None
     matched_image_timestamp: Optional[float] = None
     matched_image_score: Optional[float] = None
     shot_timestamp: Optional[float] = None

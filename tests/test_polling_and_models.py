@@ -8,6 +8,7 @@ import pytest
 from videovector._types import (
     Export,
     FilterSearchResponse,
+    ImageSearchResult,
     LlmCall,
     MultimodalSearchResult,
     SearchResult,
@@ -352,7 +353,31 @@ def test_segment_run_result_accepts_video_id() -> None:
     assert result.video_id == "video_1"
 
 
-def test_multimodal_search_result_preserves_shot_timestamp() -> None:
+@pytest.mark.parametrize("result_type", [ImageSearchResult, MultimodalSearchResult])
+def test_visual_search_result_preserves_durable_matched_image_uri(
+    result_type: type[ImageSearchResult] | type[MultimodalSearchResult],
+) -> None:
+    payload: dict[str, Any] = {
+        "result_id": "segment:seg_1:run_1",
+        "video_id": "video_1",
+        "segment_id": "seg_1",
+        "text_content": "sample",
+        "similarity_score": 0.87,
+        "matched_image_uri": "https://media.example.test/bounded",
+        "matched_image_gcs_uri": "gs://managed-media/users/user_1/shots/shot_1.jpg",
+        "shot_timestamp": 10.9,
+    }
+    if result_type is MultimodalSearchResult:
+        payload.update(fused_score=0.91, match_type="both")
+
+    result = result_type.model_validate(payload)
+
+    assert result.matched_image_uri == "https://media.example.test/bounded"
+    assert result.matched_image_gcs_uri == "gs://managed-media/users/user_1/shots/shot_1.jpg"
+    assert result.shot_timestamp == 10.9
+
+
+def test_multimodal_search_result_defaults_durable_matched_image_uri_to_none() -> None:
     result = MultimodalSearchResult.model_validate(
         {
             "result_id": "segment:seg_1:run_1",
@@ -366,6 +391,7 @@ def test_multimodal_search_result_preserves_shot_timestamp() -> None:
         }
     )
 
+    assert result.matched_image_gcs_uri is None
     assert result.shot_timestamp == 10.9
 
 
