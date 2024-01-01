@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 2.1.0
+
+- Import public HTTPS media and individual YouTube URLs through the existing durable import lifecycle.
+- Submit URL or existing-media analyses and observe their stable analysis IDs without hidden polling.
+- Upload local batches through the canonical native resumable storage sessions with bounded concurrency. Keep existing ImportJob manifests and complete-output processing selectors.
 
 ## 2.0.0
 

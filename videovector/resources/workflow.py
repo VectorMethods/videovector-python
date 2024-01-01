@@ -17,10 +17,12 @@ from typing import (
     Optional,
     Union,
 )
+from urllib.parse import quote
 from uuid import uuid4
 
-from .._exceptions import ProcessingError, TimeoutError
+from .._exceptions import ProcessingError, TimeoutError, VideoVectorError
 from .._types import (
+    AnalysisResponse,
     ImportJob,
     PromptRun,
     SearchResult,
@@ -28,6 +30,7 @@ from .._types import (
     WorkflowProcessResponse,
     WorkflowSearchResponse,
 )
+from ._uploads import async_upload_files, local_files, upload_files
 
 if TYPE_CHECKING:
     from .._http import AsyncHttpClient, SyncHttpClient
@@ -176,6 +179,83 @@ def _cursor_request(
     return normalized
 
 
+def _source_body(
+    *,
+    urls: Optional[Union[str, List[str]]] = None,
+    files: Optional[List[Dict[str, Any]]] = None,
+    upload: bool = False,
+    video_ids: Optional[List[str]] = None,
+    import_job_id: Optional[str] = None,
+    index_id: Optional[str] = None,
+    index_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    if (
+        sum(
+            (
+                urls is not None,
+                files is not None,
+                upload,
+                video_ids is not None,
+                import_job_id is not None,
+            )
+        )
+        > 1
+    ):
+        raise ValueError("Provide one source: urls, files, upload, or video_ids")
+    if import_job_id and (index_id or index_name):
+        raise ValueError("import_job_id cannot be combined with an index")
+    if index_id and index_name:
+        raise ValueError("index_id and index_name are mutually exclusive")
+    if urls is not None:
+        values = [urls] if isinstance(urls, str) else urls
+        if (
+            not isinstance(values, list)
+            or not 1 <= len(values) <= 8
+            or any(not isinstance(value, str) or not value.strip() for value in values)
+        ):
+            raise ValueError("urls must be a URL or a list of 1 to 8 URLs")
+    return {
+        key: value
+        for key, value in {
+            "urls": urls,
+            "files": files,
+            "video_ids": video_ids,
+            "import_job_id": import_job_id,
+            "index_id": index_id,
+            "index_name": index_name,
+            "upload": True if upload else None,
+        }.items()
+        if value is not None
+    }
+
+
+def _analysis_body(
+    *,
+    instruction: Optional[str],
+    prompt_id: Optional[str],
+    wait_seconds: int,
+    detail: Literal["summary", "full"],
+    **sources: Any,
+) -> Dict[str, Any]:
+    if bool((instruction or "").strip()) == bool((prompt_id or "").strip()):
+        raise ValueError("Provide exactly one of instruction or prompt_id")
+    if (
+        isinstance(wait_seconds, bool)
+        or not isinstance(wait_seconds, int)
+        or not 0 <= wait_seconds <= 30
+    ):
+        raise ValueError("wait_seconds must be between 0 and 30")
+    if detail not in {"summary", "full"}:
+        raise ValueError("detail must be summary or full")
+    body = _source_body(**sources)
+    body.update(wait_seconds=wait_seconds, detail=detail)
+    if instruction is not None:
+        body["instruction"] = instruction
+    else:
+        body["prompt_id"] = prompt_id
+    return body
+
+
 class WorkflowSearchPage:
     """One stable workflow-search page with cursor continuation."""
 
@@ -266,6 +346,103 @@ class WorkflowResource:
     def __init__(self, client: "SyncHttpClient") -> None:
         self._client = client
 
+    def upload_files(
+        self,
+        paths: List[Union[str, Path]],
+        *,
+        title: Optional[str] = None,
+        index_id: Optional[str] = None,
+        index_name: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> ImportJob:
+        """Upload up to eight local files directly to storage with bounded concurrency."""
+        key = _idempotency_key("upload-files", idempotency_key)
+        files = local_files(paths, key)
+        body = _source_body(index_id=index_id, index_name=index_name)
+        if title is not None:
+            body["title"] = title
+        job = self._client.post("/workflow/attachments", json=body, idempotency_key=key)
+        try:
+            result = upload_files(self._client, job, files)
+        except VideoVectorError as error:
+            error.details = {
+                **(error.details or {}),
+                "job_id": job["job_id"],
+                "idempotency_key": key,
+            }
+            raise
+        return ImportJob.model_validate(result)
+
+    def import_urls(
+        self,
+        urls: Union[str, List[str]],
+        *,
+        title: Optional[str] = None,
+        index_id: Optional[str] = None,
+        index_name: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> ImportJob:
+        """Import public media/YouTube URLs in one server-owned job; no local download."""
+        body = _source_body(urls=urls, index_id=index_id, index_name=index_name)
+        if title is not None:
+            body["title"] = title
+        response = self._client.post(
+            "/workflow/attachments",
+            json=body,
+            idempotency_key=_idempotency_key("import", idempotency_key),
+        )
+        return ImportJob.model_validate(response)
+
+    def analyze(
+        self,
+        *,
+        instruction: Optional[str] = None,
+        prompt_id: Optional[str] = None,
+        urls: Optional[Union[str, List[str]]] = None,
+        files: Optional[List[Dict[str, Any]]] = None,
+        upload: bool = False,
+        video_ids: Optional[List[str]] = None,
+        import_job_id: Optional[str] = None,
+        index_id: Optional[str] = None,
+        index_name: Optional[str] = None,
+        wait_seconds: int = 0,
+        detail: Literal["summary", "full"] = "summary",
+        idempotency_key: Optional[str] = None,
+    ) -> AnalysisResponse:
+        """Submit once; an index with URLs/files selects their destination."""
+        response = self._client.post(
+            "/workflow/analyses",
+            json=_analysis_body(
+                instruction=instruction,
+                prompt_id=prompt_id,
+                urls=urls,
+                files=files,
+                upload=upload,
+                video_ids=video_ids,
+                import_job_id=import_job_id,
+                index_id=index_id,
+                index_name=index_name,
+                wait_seconds=wait_seconds,
+                detail=detail,
+            ),
+            idempotency_key=_idempotency_key("analyze", idempotency_key),
+        )
+        return AnalysisResponse.model_validate(response)
+
+    def get_analysis(
+        self,
+        analysis_id: str,
+        *,
+        wait_seconds: int = 0,
+        detail: Literal["summary", "full"] = "summary",
+    ) -> AnalysisResponse:
+        """Read the existing analysis without submitting or downloading media again."""
+        response = self._client.get(
+            f"/workflow/analyses/{quote(analysis_id, safe='')}",
+            params={"wait_seconds": wait_seconds, "detail": detail},
+        )
+        return AnalysisResponse.model_validate(response)
+
     def upload(
         self,
         file: MediaInput,
@@ -275,6 +452,15 @@ class WorkflowResource:
         index_name: Optional[str] = None,
         idempotency_key: Optional[str] = None,
     ) -> ImportJob:
+        key = _idempotency_key("upload", idempotency_key)
+        if isinstance(file, (str, Path)):
+            return self.upload_files(
+                [file],
+                title=title,
+                index_id=index_id,
+                index_name=index_name,
+                idempotency_key=key,
+            )
         data = {
             key: value
             for key, value in {
@@ -284,26 +470,14 @@ class WorkflowResource:
             }.items()
             if value is not None
         }
-        key = _idempotency_key("upload", idempotency_key)
-        if isinstance(file, (str, Path)):
-            path = Path(file)
-            with path.open("rb") as stream:
-                response = self._client.post(
-                    "/workflow/upload",
-                    processing_intent="upload_media",
-                    data=data,
-                    files={"file": (path.name, stream)},
-                    idempotency_key=key,
-                )
-        else:
-            filename = Path(str(getattr(file, "name", "upload"))).name
-            response = self._client.post(
-                "/workflow/upload",
-                processing_intent="upload_media",
-                data=data,
-                files={"file": (filename, file)},
-                idempotency_key=key,
-            )
+        filename = Path(str(getattr(file, "name", "upload"))).name
+        response = self._client.post(
+            "/workflow/upload",
+            processing_intent="upload_media",
+            data=data,
+            files={"file": (filename, file)},
+            idempotency_key=key,
+        )
         return ImportJob.model_validate(response)
 
     def define(
@@ -431,6 +605,103 @@ class AsyncWorkflowResource:
     def __init__(self, client: "AsyncHttpClient") -> None:
         self._client = client
 
+    async def upload_files(
+        self,
+        paths: List[Union[str, Path]],
+        *,
+        title: Optional[str] = None,
+        index_id: Optional[str] = None,
+        index_name: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> ImportJob:
+        """Upload up to eight local files directly to storage with bounded concurrency."""
+        key = _idempotency_key("upload-files", idempotency_key)
+        files = local_files(paths, key)
+        body = _source_body(index_id=index_id, index_name=index_name)
+        if title is not None:
+            body["title"] = title
+        job = await self._client.post("/workflow/attachments", json=body, idempotency_key=key)
+        try:
+            result = await async_upload_files(self._client, job, files)
+        except VideoVectorError as error:
+            error.details = {
+                **(error.details or {}),
+                "job_id": job["job_id"],
+                "idempotency_key": key,
+            }
+            raise
+        return ImportJob.model_validate(result)
+
+    async def import_urls(
+        self,
+        urls: Union[str, List[str]],
+        *,
+        title: Optional[str] = None,
+        index_id: Optional[str] = None,
+        index_name: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> ImportJob:
+        """Import public media/YouTube URLs in one server-owned job; no local download."""
+        body = _source_body(urls=urls, index_id=index_id, index_name=index_name)
+        if title is not None:
+            body["title"] = title
+        response = await self._client.post(
+            "/workflow/attachments",
+            json=body,
+            idempotency_key=_idempotency_key("import", idempotency_key),
+        )
+        return ImportJob.model_validate(response)
+
+    async def analyze(
+        self,
+        *,
+        instruction: Optional[str] = None,
+        prompt_id: Optional[str] = None,
+        urls: Optional[Union[str, List[str]]] = None,
+        files: Optional[List[Dict[str, Any]]] = None,
+        upload: bool = False,
+        video_ids: Optional[List[str]] = None,
+        import_job_id: Optional[str] = None,
+        index_id: Optional[str] = None,
+        index_name: Optional[str] = None,
+        wait_seconds: int = 0,
+        detail: Literal["summary", "full"] = "summary",
+        idempotency_key: Optional[str] = None,
+    ) -> AnalysisResponse:
+        """Submit once; an index with URLs/files selects their destination."""
+        response = await self._client.post(
+            "/workflow/analyses",
+            json=_analysis_body(
+                instruction=instruction,
+                prompt_id=prompt_id,
+                urls=urls,
+                files=files,
+                upload=upload,
+                video_ids=video_ids,
+                import_job_id=import_job_id,
+                index_id=index_id,
+                index_name=index_name,
+                wait_seconds=wait_seconds,
+                detail=detail,
+            ),
+            idempotency_key=_idempotency_key("analyze", idempotency_key),
+        )
+        return AnalysisResponse.model_validate(response)
+
+    async def get_analysis(
+        self,
+        analysis_id: str,
+        *,
+        wait_seconds: int = 0,
+        detail: Literal["summary", "full"] = "summary",
+    ) -> AnalysisResponse:
+        """Read the existing analysis without submitting or downloading media again."""
+        response = await self._client.get(
+            f"/workflow/analyses/{quote(analysis_id, safe='')}",
+            params={"wait_seconds": wait_seconds, "detail": detail},
+        )
+        return AnalysisResponse.model_validate(response)
+
     async def upload(
         self,
         file: MediaInput,
@@ -440,6 +711,15 @@ class AsyncWorkflowResource:
         index_name: Optional[str] = None,
         idempotency_key: Optional[str] = None,
     ) -> ImportJob:
+        key = _idempotency_key("upload", idempotency_key)
+        if isinstance(file, (str, Path)):
+            return await self.upload_files(
+                [file],
+                title=title,
+                index_id=index_id,
+                index_name=index_name,
+                idempotency_key=key,
+            )
         data = {
             key: value
             for key, value in {
@@ -449,26 +729,14 @@ class AsyncWorkflowResource:
             }.items()
             if value is not None
         }
-        key = _idempotency_key("upload", idempotency_key)
-        if isinstance(file, (str, Path)):
-            path = Path(file)
-            with path.open("rb") as stream:
-                response = await self._client.post(
-                    "/workflow/upload",
-                    processing_intent="upload_media",
-                    data=data,
-                    files={"file": (path.name, stream)},
-                    idempotency_key=key,
-                )
-        else:
-            filename = Path(str(getattr(file, "name", "upload"))).name
-            response = await self._client.post(
-                "/workflow/upload",
-                processing_intent="upload_media",
-                data=data,
-                files={"file": (filename, file)},
-                idempotency_key=key,
-            )
+        filename = Path(str(getattr(file, "name", "upload"))).name
+        response = await self._client.post(
+            "/workflow/upload",
+            processing_intent="upload_media",
+            data=data,
+            files={"file": (filename, file)},
+            idempotency_key=key,
+        )
         return ImportJob.model_validate(response)
 
     async def define(
