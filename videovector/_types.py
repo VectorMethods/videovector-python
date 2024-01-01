@@ -364,11 +364,26 @@ class PromptRun(BaseModel):
 class SegmentRunResult(BaseModel):
     """Segment-level result from a prompt run."""
 
+    result_type: Literal["segment"] = "segment"
+    result_id: Optional[str] = None
     segment_id: str
     video_id: Optional[str] = None
     run_id: str
     prompt_id: str
+    prompt_run_id: Optional[str] = None
+    video_name: Optional[str] = None
+    source_index_id: Optional[str] = None
     executed_at: str
+    start_time: Optional[float] = None
+    end_time: Optional[float] = None
+    segment_uri: Optional[str] = None
+    gcs_uri: Optional[str] = None
+    thumbnail_uri: Optional[str] = None
+    thumbnail_gcs_uri: Optional[str] = None
+    gif_uri: Optional[str] = None
+    gif_gcs_uri: Optional[str] = None
+    thumbnail_available: bool = False
+    gif_available: bool = False
     metadata: Dict[str, Any]
     metadata_text: str
     processing_warning: Optional[str] = None
@@ -379,15 +394,22 @@ class SegmentRunResult(BaseModel):
     field_extraction_error: Optional[str] = None
     transcription_error: Optional[str] = None
     image_embedding_error: Optional[str] = None
+    marker: MarkerInfo = Field(default_factory=MarkerInfo)
+    extracted_metadata_markers: Dict[str, MarkerInfo] = Field(default_factory=dict)
     metadata_markers: Dict[str, MarkerInfo] = Field(default_factory=dict)
 
 
 class PromptRunVideoResult(BaseModel):
     """Video/audio-level synthesis result for a single media item in a run."""
 
+    result_type: Literal["video"] = "video"
+    result_id: Optional[str] = None
     run_id: str
     prompt_id: str
+    prompt_run_id: Optional[str] = None
     video_id: str
+    video_name: Optional[str] = None
+    source_index_id: Optional[str] = None
     executed_at: str
     status: str
     metadata: Dict[str, Any]
@@ -406,6 +428,21 @@ class PromptRunVideoResult(BaseModel):
     error_message: Optional[str] = None
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
+    segment_uri: Optional[str] = None
+    gcs_uri: Optional[str] = None
+    thumbnail_uri: Optional[str] = None
+    thumbnail_gcs_uri: Optional[str] = None
+    gif_uri: Optional[str] = None
+    gif_gcs_uri: Optional[str] = None
+    thumbnail_available: bool = False
+    gif_available: bool = False
+    preview_segment_id: Optional[str] = None
+    preview_start_time: Optional[float] = None
+    preview_end_time: Optional[float] = None
+    preview_segment_uri: Optional[str] = None
+    preview_thumbnail_uri: Optional[str] = None
+    preview_gif_uri: Optional[str] = None
+    marker: MarkerInfo = Field(default_factory=MarkerInfo)
 
 
 class PromptRunFailureOperationCounts(BaseModel):
@@ -537,25 +574,42 @@ class SearchResult(BaseModel):
     result_id: str
     video_id: str
     video_uri: Optional[str] = None
+    video_name: Optional[str] = None
     segment_id: Optional[str] = None
     start_time: Optional[float] = None
     end_time: Optional[float] = None
+    preview_segment_id: Optional[str] = None
+    preview_start_time: Optional[float] = None
+    preview_end_time: Optional[float] = None
+    preview_segment_uri: Optional[str] = None
+    preview_thumbnail_uri: Optional[str] = None
+    preview_gif_uri: Optional[str] = None
     text_content: str
     content_preview: str = ""
-    similarity_score: float
+    metadata_text: Optional[str] = None
+    similarity_score: Optional[float] = None
+    reranked_score: Optional[float] = None
     segment_uri: Optional[str] = None
+    gcs_uri: Optional[str] = None
+    thumbnail_gcs_uri: Optional[str] = None
+    gif_gcs_uri: Optional[str] = None
     thumbnail_uri: Optional[str] = None
     thumbnail_data: Optional[str] = None
     thumbnail_available: bool = False
     gif_uri: Optional[str] = None
     gif_data: Optional[str] = None
     gif_available: bool = False
+    media_type: Optional[Literal["video", "audio", "image"]] = None
+    metadata: Optional[Dict[str, Any]] = None
     extracted_metadata: Optional[Dict[str, Any]] = None
     field_scores: Optional[Dict[str, float]] = None
     field_instance_scores: Optional[Dict[str, float]] = None
     matched_field_paths: Optional[List[str]] = None
     matched_field_instances: Optional[List[MatchedFieldInstance]] = None
     run_id: Optional[str] = None
+    source_run_id: Optional[str] = None
+    prompt_run_id: Optional[str] = None
+    raw_llm_response: Optional[str] = None
     source_index_id: Optional[str] = None
     marker: MarkerInfo = Field(default_factory=MarkerInfo)
     extracted_metadata_markers: Dict[str, MarkerInfo] = Field(default_factory=dict)
@@ -582,6 +636,7 @@ class MultimodalSearchResult(SearchResult):
     matched_image_uri: Optional[str] = None
     matched_image_timestamp: Optional[float] = None
     matched_image_score: Optional[float] = None
+    shot_timestamp: Optional[float] = None
 
 
 class Webhook(BaseModel):

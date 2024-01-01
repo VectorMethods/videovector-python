@@ -101,6 +101,7 @@ class ConnectorsResource:
         scopes: Optional[List[str]] = None,
         export_base_path: Optional[str] = None,
         import_mode: str = "all",
+        idempotency_key: Optional[str] = None,
     ) -> Connector:
         """
         Create a Google Cloud Storage connector.
@@ -133,7 +134,15 @@ class ConnectorsResource:
                 }
                 if export_base_path:
                     data["export_base_path"] = export_base_path
-                response = self._client.post("/connectors/gcs", files=files, data=data)
+                response = self._client.post(
+                    "/connectors/gcs",
+                    files=files,
+                    data=data,
+                    idempotency_key=_resolve_connector_idempotency_key(
+                        "gcs",
+                        idempotency_key,
+                    ),
+                )
         else:
             filename = getattr(credentials_file, "name", "credentials.json")
             files_payload: dict[str, tuple[str, Any, str]] = {
@@ -148,7 +157,15 @@ class ConnectorsResource:
             }
             if export_base_path:
                 data_payload["export_base_path"] = export_base_path
-            response = self._client.post("/connectors/gcs", files=files_payload, data=data_payload)
+            response = self._client.post(
+                "/connectors/gcs",
+                files=files_payload,
+                data=data_payload,
+                idempotency_key=_resolve_connector_idempotency_key(
+                    "gcs",
+                    idempotency_key,
+                ),
+            )
 
         return Connector.model_validate(response)
 
@@ -388,6 +405,7 @@ class AsyncConnectorsResource:
         scopes: Optional[List[str]] = None,
         export_base_path: Optional[str] = None,
         import_mode: str = "all",
+        idempotency_key: Optional[str] = None,
     ) -> Connector:
         """Create a Google Cloud Storage connector."""
         if isinstance(credentials_file, (str, Path)):
@@ -405,7 +423,15 @@ class AsyncConnectorsResource:
                 }
                 if export_base_path:
                     data["export_base_path"] = export_base_path
-                response = await self._client.post("/connectors/gcs", files=files, data=data)
+                response = await self._client.post(
+                    "/connectors/gcs",
+                    files=files,
+                    data=data,
+                    idempotency_key=_resolve_connector_idempotency_key(
+                        "gcs",
+                        idempotency_key,
+                    ),
+                )
         else:
             filename = getattr(credentials_file, "name", "credentials.json")
             files_payload: dict[str, tuple[str, Any, str]] = {
@@ -424,6 +450,10 @@ class AsyncConnectorsResource:
                 "/connectors/gcs",
                 files=files_payload,
                 data=data_payload,
+                idempotency_key=_resolve_connector_idempotency_key(
+                    "gcs",
+                    idempotency_key,
+                ),
             )
 
         return Connector.model_validate(response)

@@ -188,6 +188,7 @@ def test_sync_binary_stream_preserves_structured_rate_limit() -> None:
                 "error": {
                     "code": "resource_rate_quota_exceeded",
                     "message": "Export download quota exceeded",
+                    "request_id": "req-stream-quota",
                     "details": {"resource": "metadata_export_download_bytes_per_day"},
                 }
             },
@@ -212,6 +213,7 @@ def test_sync_binary_stream_preserves_structured_rate_limit() -> None:
         client.close()
 
     assert exc_info.value.error_code == "resource_rate_quota_exceeded"
+    assert exc_info.value.request_id == "req-stream-quota"
     assert exc_info.value.retry_after == 60
 
 
@@ -432,6 +434,7 @@ def test_sync_rate_limit_preserves_structured_quota_contract(
                 "error": {
                     "code": "resource_rate_quota_exceeded",
                     "message": "Resource quota exceeded",
+                    "request_id": "req-sync-quota",
                     "details": {
                         "resource": "ingested_bytes_per_day",
                         "reset_time": "2026-07-17T00:00:00+00:00",
@@ -448,6 +451,7 @@ def test_sync_rate_limit_preserves_structured_quota_contract(
 
     client.close()
     assert exc_info.value.error_code == "resource_rate_quota_exceeded"
+    assert exc_info.value.request_id == "req-sync-quota"
     assert exc_info.value.details == {
         "resource": "ingested_bytes_per_day",
         "reset_time": "2026-07-17T00:00:00+00:00",
@@ -511,6 +515,7 @@ def test_sync_persistent_resource_quota_maps_to_structured_conflict(
                 "error": {
                     "code": "resource_quota_exceeded",
                     "message": "Resource quota exceeded",
+                    "request_id": "req-sync-capacity",
                     "details": {
                         "resource": "indexes",
                         "limit": 5,
@@ -531,6 +536,7 @@ def test_sync_persistent_resource_quota_maps_to_structured_conflict(
         client.close()
 
     assert exc_info.value.error_code == "resource_quota_exceeded"
+    assert exc_info.value.request_id == "req-sync-capacity"
     assert exc_info.value.details == {
         "resource": "indexes",
         "limit": 5,
@@ -735,6 +741,7 @@ def test_async_rate_limit_preserves_structured_llm_contract(
                 "error": {
                     "code": "llm_daily_budget_exceeded",
                     "message": "Daily LLM budget exceeded",
+                    "request_id": "req-async-llm",
                     "details": {"reset_time": "2026-07-17T00:00:00+00:00"},
                 }
             },
@@ -760,6 +767,7 @@ def test_async_rate_limit_preserves_structured_llm_contract(
 
     error = asyncio.run(_run())
     assert error.error_code == "llm_daily_budget_exceeded"
+    assert error.request_id == "req-async-llm"
     assert error.details == {"reset_time": "2026-07-17T00:00:00+00:00"}
     assert error.retry_after == 60
 
@@ -836,6 +844,7 @@ def test_async_global_llm_guard_maps_to_structured_service_error(
                 "error": {
                     "code": "llm_budget_guard_open",
                     "message": "Public LLM generation is temporarily unavailable",
+                    "request_id": "req-async-global-guard",
                 }
             },
             request=request,
@@ -860,6 +869,7 @@ def test_async_global_llm_guard_maps_to_structured_service_error(
 
     error = asyncio.run(_run())
     assert error.error_code == "llm_budget_guard_open"
+    assert error.request_id == "req-async-global-guard"
     assert error.status_code == 503
     assert error.details == {}
 

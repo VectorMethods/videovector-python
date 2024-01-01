@@ -5,7 +5,14 @@ from typing import Any, Optional
 
 import pytest
 
-from videovector._types import Export, FilterSearchResponse, LlmCall, SegmentRunResult
+from videovector._types import (
+    Export,
+    FilterSearchResponse,
+    LlmCall,
+    MultimodalSearchResult,
+    SearchResult,
+    SegmentRunResult,
+)
 from videovector.resources.import_jobs import AsyncImportJobsResource, ImportJobsResource
 from videovector.resources.prompt_runs import AsyncPromptRunsResource, PromptRunsResource
 
@@ -46,7 +53,13 @@ class _FakeSyncHttp:
         self._responses = responses
         self._idx = 0
 
-    def get(self, endpoint: str, *, params: Optional[dict[str, Any]] = None, headers: Optional[dict[str, str]] = None) -> dict[str, Any]:
+    def get(
+        self,
+        endpoint: str,
+        *,
+        params: Optional[dict[str, Any]] = None,
+        headers: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
         response = self._responses[self._idx]
         self._idx += 1
         return response
@@ -57,7 +70,13 @@ class _FakeAsyncHttp:
         self._responses = responses
         self._idx = 0
 
-    async def get(self, endpoint: str, *, params: Optional[dict[str, Any]] = None, headers: Optional[dict[str, str]] = None) -> dict[str, Any]:
+    async def get(
+        self,
+        endpoint: str,
+        *,
+        params: Optional[dict[str, Any]] = None,
+        headers: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
         response = self._responses[self._idx]
         self._idx += 1
         return response
@@ -109,7 +128,9 @@ class _CaptureAsyncPostHttp(_CaptureSyncPostHttp):
         )
 
 
-def test_prompt_runs_wait_for_completion_accepts_lowercase_status(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_prompt_runs_wait_for_completion_accepts_lowercase_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     http = _FakeSyncHttp([_prompt_run_payload("processing"), _prompt_run_payload("completed")])
     resource = PromptRunsResource(http)  # type: ignore[arg-type]
     monkeypatch.setattr("time.sleep", lambda *_args, **_kwargs: None)
@@ -177,7 +198,9 @@ def test_prompt_runs_wait_for_completion_async_accepts_cancelled() -> None:
     asyncio.run(_run())
 
 
-def test_import_jobs_wait_for_completion_accepts_lowercase_status(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_import_jobs_wait_for_completion_accepts_lowercase_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     http = _FakeSyncHttp([_import_job_payload("importing"), _import_job_payload("completed")])
     resource = ImportJobsResource(http)  # type: ignore[arg-type]
     monkeypatch.setattr("time.sleep", lambda *_args, **_kwargs: None)
@@ -327,3 +350,38 @@ def test_segment_run_result_accepts_video_id() -> None:
     }
     result = SegmentRunResult.model_validate(payload)
     assert result.video_id == "video_1"
+
+
+def test_multimodal_search_result_preserves_shot_timestamp() -> None:
+    result = MultimodalSearchResult.model_validate(
+        {
+            "result_id": "segment:seg_1:run_1",
+            "video_id": "video_1",
+            "segment_id": "seg_1",
+            "text_content": "sample",
+            "similarity_score": 0.87,
+            "fused_score": 0.91,
+            "match_type": "both",
+            "shot_timestamp": 10.9,
+        }
+    )
+
+    assert result.shot_timestamp == 10.9
+
+
+def test_search_result_preserves_nullable_similarity_and_metadata() -> None:
+    result = SearchResult.model_validate(
+        {
+            "result_id": "video:video_1:run_1",
+            "result_type": "video",
+            "video_id": "video_1",
+            "text_content": "sample",
+            "similarity_score": None,
+            "metadata": {"summary": "full metadata"},
+            "extracted_metadata": None,
+        }
+    )
+
+    assert result.similarity_score is None
+    assert result.metadata == {"summary": "full metadata"}
+    assert result.extracted_metadata is None

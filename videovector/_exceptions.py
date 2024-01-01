@@ -16,6 +16,7 @@ class VideoVectorError(Exception):
     status_code: Optional[int]
     error_code: Optional[str]
     details: Optional[dict[str, Any]]
+    request_id: Optional[str]
 
     def __init__(
         self,
@@ -24,19 +25,22 @@ class VideoVectorError(Exception):
         status_code: Optional[int] = None,
         error_code: Optional[str] = None,
         details: Optional[dict[str, Any]] = None,
+        request_id: Optional[str] = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.status_code = status_code
         self.error_code = error_code
         self.details = details or {}
+        self.request_id = request_id
 
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__}("
             f"message={self.message!r}, "
             f"status_code={self.status_code}, "
-            f"error_code={self.error_code!r})"
+            f"error_code={self.error_code!r}, "
+            f"request_id={self.request_id!r})"
         )
 
 
@@ -77,12 +81,14 @@ class RateLimitError(VideoVectorError):
         error_code: Optional[str] = None,
         details: Optional[dict[str, Any]] = None,
         retry_after: Optional[int] = None,
+        request_id: Optional[str] = None,
     ) -> None:
         super().__init__(
             message,
             status_code=status_code,
             error_code=error_code,
             details=details,
+            request_id=request_id,
         )
         self.retry_after = retry_after
 
@@ -129,11 +135,14 @@ def _raise_for_status(status_code: int, body: dict[str, Any]) -> None:
     message = error_data.get("message", "Unknown error")
     error_code = error_data.get("error_code") or error_data.get("code")
     details = error_data.get("details", {})
+    raw_request_id = error_data.get("request_id")
+    request_id = raw_request_id if isinstance(raw_request_id, str) else None
 
     kwargs = {
         "status_code": status_code,
         "error_code": error_code,
         "details": details,
+        "request_id": request_id,
     }
 
     if status_code == 401:

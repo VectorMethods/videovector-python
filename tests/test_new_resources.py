@@ -235,10 +235,30 @@ def _search_result_payload() -> dict[str, Any]:
         "result_id": "segment:seg_1:run_1",
         "segment_id": "seg_1",
         "video_id": "video_1",
+        "video_name": "Episode 1",
         "start_time": 0.0,
         "end_time": 10.0,
+        "preview_segment_id": "seg_1",
+        "preview_start_time": 0.0,
+        "preview_end_time": 10.0,
+        "preview_segment_uri": "https://api.example.com/media/segment?token=segment",
+        "preview_thumbnail_uri": "https://api.example.com/media/thumbnail?token=thumbnail",
+        "preview_gif_uri": "https://api.example.com/media/gif?token=gif",
         "text_content": "demo",
+        "metadata_text": "demo metadata",
         "similarity_score": 0.9,
+        "reranked_score": 0.95,
+        "gcs_uri": "gs://bucket/segments/seg_1.mp4",
+        "thumbnail_gcs_uri": "gs://bucket/thumbnails/seg_1.jpg",
+        "gif_gcs_uri": "gs://bucket/gifs/seg_1.gif",
+        "media_type": "image",
+        "metadata": {"summary": "full metadata"},
+        "extracted_metadata": {"scene": "intro"},
+        "run_id": "run_1",
+        "source_run_id": "source_run_1",
+        "prompt_run_id": "run_1",
+        "raw_llm_response": '{"scene":"intro"}',
+        "source_index_id": "idx_1",
         "marker": _marker_payload("marker_search_1", "green"),
         "extracted_metadata_markers": {
             "scene": _marker_payload("marker_scene_1", "yellow"),
@@ -248,11 +268,26 @@ def _search_result_payload() -> dict[str, Any]:
 
 def _segment_run_result_payload() -> dict[str, Any]:
     return {
+        "result_type": "segment",
+        "result_id": "segment:seg_1:run_1",
         "segment_id": "seg_1",
         "video_id": "video_1",
         "run_id": "run_1",
         "prompt_id": "prompt_1",
+        "prompt_run_id": "run_1",
+        "video_name": "Episode 1",
+        "source_index_id": "idx_1",
         "executed_at": "2026-01-01T00:00:00Z",
+        "start_time": 0.0,
+        "end_time": 10.0,
+        "segment_uri": "https://api.example.com/media/segment?token=segment",
+        "gcs_uri": "gs://bucket/segments/seg_1.mp4",
+        "thumbnail_uri": "https://api.example.com/media/thumbnail?token=thumbnail",
+        "thumbnail_gcs_uri": "gs://bucket/thumbnails/seg_1.jpg",
+        "gif_uri": "https://api.example.com/media/gif?token=gif",
+        "gif_gcs_uri": "gs://bucket/gifs/seg_1.gif",
+        "thumbnail_available": True,
+        "gif_available": True,
         "metadata": {"summary": "demo"},
         "metadata_text": "demo",
         "processing_warning": None,
@@ -276,9 +311,14 @@ def _segment_run_result_payload() -> dict[str, Any]:
 
 def _prompt_run_video_result_payload() -> dict[str, Any]:
     return {
+        "result_type": "video",
+        "result_id": "video:video_1:run_1",
         "run_id": "run_1",
         "prompt_id": "prompt_1",
+        "prompt_run_id": "run_1",
         "video_id": "video_1",
+        "video_name": "Episode 1",
+        "source_index_id": "idx_1",
         "executed_at": "2026-01-01T00:00:00Z",
         "status": "completed",
         "metadata": {"summary": "Full video summary"},
@@ -297,6 +337,20 @@ def _prompt_run_video_result_payload() -> dict[str, Any]:
         "error_message": None,
         "started_at": "2026-01-01T00:00:00Z",
         "completed_at": "2026-01-01T00:00:02Z",
+        "segment_uri": "https://api.example.com/media/segment?token=segment",
+        "gcs_uri": "gs://bucket/segments/seg_1.mp4",
+        "thumbnail_uri": "https://api.example.com/media/thumbnail?token=thumbnail",
+        "thumbnail_gcs_uri": "gs://bucket/thumbnails/seg_1.jpg",
+        "gif_uri": "https://api.example.com/media/gif?token=gif",
+        "gif_gcs_uri": "gs://bucket/gifs/seg_1.gif",
+        "thumbnail_available": True,
+        "gif_available": True,
+        "preview_segment_id": "seg_1",
+        "preview_start_time": 0.0,
+        "preview_end_time": 10.0,
+        "preview_segment_uri": "https://api.example.com/media/segment?token=segment",
+        "preview_thumbnail_uri": "https://api.example.com/media/thumbnail?token=thumbnail",
+        "preview_gif_uri": "https://api.example.com/media/gif?token=gif",
     }
 
 
@@ -897,12 +951,20 @@ def test_prompt_runs_resource_sync() -> None:
 
     results = resource.list_results("run_1", video_id="video_1", limit=25)
     assert results.data[0].metadata_markers["summary"].marker_id == "marker_field_1"
+    assert results.data[0].segment_uri == ("https://api.example.com/media/segment?token=segment")
+    assert results.data[0].gcs_uri == "gs://bucket/segments/seg_1.mp4"
+    assert results.data[0].thumbnail_gcs_uri == "gs://bucket/thumbnails/seg_1.jpg"
+    assert results.data[0].gif_gcs_uri == "gs://bucket/gifs/seg_1.gif"
 
     llm_calls = resource.get_llm_calls("run_1")
     assert llm_calls[0].llm_call_id == "llm_1"
 
     video_result = resource.get_video_result("run_1", "video_1")
     assert video_result.llm_attempted is True
+    assert video_result.segment_uri == ("https://api.example.com/media/segment?token=segment")
+    assert video_result.gcs_uri == "gs://bucket/segments/seg_1.mp4"
+    assert video_result.thumbnail_gcs_uri == "gs://bucket/thumbnails/seg_1.jpg"
+    assert video_result.gif_gcs_uri == "gs://bucket/gifs/seg_1.gif"
 
     failed_segments = resource.get_failed_segments("run_1")
     assert failed_segments.videos[0].segments[0].retryable is True
@@ -971,12 +1033,18 @@ def test_prompt_runs_resource_async() -> None:
 
         results = await resource.list_results("run_1", video_id="video_1")
         assert results.data[0].segment_id == "seg_1"
+        assert results.data[0].gcs_uri == "gs://bucket/segments/seg_1.mp4"
+        assert results.data[0].thumbnail_gcs_uri == "gs://bucket/thumbnails/seg_1.jpg"
+        assert results.data[0].gif_gcs_uri == "gs://bucket/gifs/seg_1.gif"
 
         llm_calls = await resource.get_llm_calls("run_1")
         assert llm_calls == []
 
         video_result = await resource.get_video_result("run_1", "video_1")
         assert video_result.video_id == "video_1"
+        assert video_result.gcs_uri == "gs://bucket/segments/seg_1.mp4"
+        assert video_result.thumbnail_gcs_uri == "gs://bucket/thumbnails/seg_1.jpg"
+        assert video_result.gif_gcs_uri == "gs://bucket/gifs/seg_1.gif"
 
         failed_segments = await resource.get_failed_segments("run_1")
         assert failed_segments.failed_segments == 2
@@ -1232,6 +1300,18 @@ def test_search_filter_playground_sync() -> None:
         page_size=10,
     )
     assert result.total_shown == 1
+    assert result.results[0].gcs_uri == "gs://bucket/segments/seg_1.mp4"
+    assert result.results[0].thumbnail_gcs_uri == "gs://bucket/thumbnails/seg_1.jpg"
+    assert result.results[0].gif_gcs_uri == "gs://bucket/gifs/seg_1.gif"
+    assert result.results[0].media_type == "image"
+    assert result.results[0].video_name == "Episode 1"
+    assert result.results[0].metadata == {"summary": "full metadata"}
+    assert result.results[0].extracted_metadata == {"scene": "intro"}
+    assert result.results[0].metadata_text == "demo metadata"
+    assert result.results[0].reranked_score == 0.95
+    assert result.results[0].source_run_id == "source_run_1"
+    assert result.results[0].prompt_run_id == "run_1"
+    assert result.results[0].raw_llm_response == '{"scene":"intro"}'
     assert result.results[0].marker.marker_id == "marker_search_1"
     assert result.results[0].extracted_metadata_markers["scene"].marker_id == "marker_scene_1"
 
@@ -1383,6 +1463,7 @@ def test_connectors_and_exports_sync() -> None:
         "export_base_path": "exports/",
     }
     assert "credentials_file" in http.calls[0]["files"]
+    assert str(http.calls[0]["idempotency_key"]).startswith("connector-create-gcs:")
 
     s3_connector = connectors.create_s3(
         name="Archive",
@@ -1468,6 +1549,7 @@ def test_connectors_and_exports_async() -> None:
         )
         assert gcs_connector.import_mode == "new_only"
         assert http.calls[0]["data"]["import_mode"] == "new_only"
+        assert str(http.calls[0]["idempotency_key"]).startswith("connector-create-gcs:")
 
         s3_connector = await connectors.create_s3(
             name="Archive",
