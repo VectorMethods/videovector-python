@@ -22,9 +22,10 @@ personal GitHub account, or a manual public workflow dispatch.
 3. Run the private `Public Repo Bot` workflow in `release` mode for this
    repository. The tag must match `videovector-vX.Y.Z` and target public `main`.
 4. The bot verifies the public graph, creates or verifies the public tag,
-   dispatches this repository's `Release` workflow, waits for registry publish
-   and install smoke tests to pass, then creates the GitHub Release with scanned
-   release text and generated notes disabled.
+   dispatches this repository's `Release` workflow on that exact tag with its
+   peeled commit SHA, waits for registry publish and install smoke tests to
+   pass, then creates the GitHub Release with scanned release text and generated
+   notes disabled.
 
 ## Immutable release bundle and resume contract
 
@@ -36,6 +37,12 @@ expected registry metadata hash, and exact Python, `uv`, build, setuptools,
 wheel, and Twine versions. `pip` is intentionally absent from the release
 environment and provenance because every dependency is installed by the
 checksum-reviewed `uv` binary before artifact construction.
+
+The guard requires the bot-provided `expected_target_sha` to be a full
+lowercase commit SHA and requires the peeled tag, checked-out commit, and
+workflow event SHA to equal it. It intentionally does not compare the release
+tag to moving public `main`: an interrupted publication remains resumable from
+the immutable tag after newer changes reach `main`.
 
 TestPyPI and PyPI publication jobs always download that tested bundle; they
 never rebuild it. A pre-existing version is successful only when its complete

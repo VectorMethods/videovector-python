@@ -4,7 +4,9 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import re
+import subprocess
 import tarfile
 import zipfile
 from argparse import Namespace
@@ -337,8 +339,124 @@ def test_release_jobs_checkout_the_guarded_source_sha() -> None:
         encoding="utf-8"
     )
 
-    assert workflow.count("ref: ${{ inputs.release_tag }}") == 1
+    assert workflow.count("ref: refs/tags/${{ inputs.release_tag }}") == 1
     assert workflow.count("ref: ${{ needs.guard.outputs.source_sha }}") == 5
+    assert re.search(
+        r"expected_target_sha:\s+"
+        r'description: "Exact commit SHA peeled from the immutable bot-created release tag"\s+'
+        r"required: true\s+type: string",
+        workflow,
+    )
+    assert "EXPECTED_TARGET_SHA: ${{ inputs.expected_target_sha }}" in workflow
+    assert workflow.count("bash scripts/validate_release_request.sh") == 1
+    assert "git fetch --no-tags origin +refs/heads/main" not in workflow
+    assert "refs/remotes/origin/main" not in workflow
+
+
+def _git(root: Path, *arguments: str) -> str:
+    return subprocess.run(
+        ("git", *arguments),
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _release_guard_fixture(tmp_path: Path) -> tuple[Path, dict[str, str], str, str]:
+    root = tmp_path / "release-repository"
+    root.mkdir()
+    _git(root, "init", "-b", "main")
+    _git(root, "config", "user.name", "VectorMethods Engineering")
+    _git(root, "config", "user.email", "opensource@vectormethods.com")
+    (root / "release.txt").write_text("release\n", encoding="utf-8")
+    _git(root, "add", "release.txt")
+    _git(root, "commit", "-m", "release")
+    release_sha = _git(root, "rev-parse", "HEAD")
+    release_tag = "videovector-v1.2.3"
+    _git(root, "tag", "-a", release_tag, "-m", "release")
+    (root / "release.txt").write_text("main advanced\n", encoding="utf-8")
+    _git(root, "commit", "-am", "advance main")
+    moving_main_sha = _git(root, "rev-parse", "HEAD")
+    _git(root, "checkout", "--detach", release_sha)
+
+    output = tmp_path / "github-output"
+    environment = {
+        **os.environ,
+        "EXPECTED_TARGET_SHA": release_sha,
+        "GITHUB_ACTOR": "vectormethods-public-bot[bot]",
+        "GITHUB_OUTPUT": str(output),
+        "GITHUB_REF": f"refs/tags/{release_tag}",
+        "GITHUB_SHA": release_sha,
+        "RELEASE_BODY_SHA256": "b" * 64,
+        "RELEASE_TAG": release_tag,
+        "RELEASE_TAG_PREFIX": "videovector-v",
+    }
+    return root, environment, release_sha, moving_main_sha
+
+
+def test_release_guard_peels_tag_and_ignores_moving_main(tmp_path: Path) -> None:
+    root, environment, release_sha, moving_main_sha = _release_guard_fixture(tmp_path)
+
+    assert moving_main_sha != release_sha
+    subprocess.run(
+        ("bash", str(Path(__file__).parents[1] / "scripts/validate_release_request.sh")),
+        cwd=root,
+        env=environment,
+        check=True,
+    )
+
+    output = Path(environment["GITHUB_OUTPUT"]).read_text(encoding="utf-8")
+    assert f"source_sha={release_sha}\n" in output
+    assert "version=1.2.3\n" in output
+
+
+@pytest.mark.parametrize(
+    "expected_sha",
+    [
+        "A" * 40,
+        "a" * 39,
+        "a" * 41,
+        "not-a-commit",
+    ],
+)
+def test_release_guard_rejects_malformed_expected_sha(
+    tmp_path: Path,
+    expected_sha: str,
+) -> None:
+    root, environment, _, _ = _release_guard_fixture(tmp_path)
+    environment["EXPECTED_TARGET_SHA"] = expected_sha
+
+    result = subprocess.run(
+        ("bash", str(Path(__file__).parents[1] / "scripts/validate_release_request.sh")),
+        cwd=root,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "expected_target_sha must be a full lowercase 40-character Git commit SHA" in (
+        result.stderr
+    )
+
+
+def test_release_guard_rejects_wrong_expected_sha(tmp_path: Path) -> None:
+    root, environment, _, moving_main_sha = _release_guard_fixture(tmp_path)
+    environment["EXPECTED_TARGET_SHA"] = moving_main_sha
+
+    result = subprocess.run(
+        ("bash", str(Path(__file__).parents[1] / "scripts/validate_release_request.sh")),
+        cwd=root,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "must match exactly" in result.stderr
 
 
 def test_release_installs_only_with_the_reviewed_uv_binary() -> None:
