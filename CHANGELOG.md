@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- Added run-scoped batch segment retrieval through
+  `BatchVideoSegmentsTarget` and synchronous/asynchronous
+  `videos.batch_segments_for_targets(...)`; `VideoSegments` now exposes the
+  resolved `run_id`.
+- Added `force_refresh` to synchronous/asynchronous
+  `videos.get_signed_url(...)` for explicit bounded-grant rotation.
+- Made retry delays understand both `Retry-After` wire formats, clamp to a
+  configurable ceiling, and remain cancellation-aware in async clients.
+- Rejected reserved custom headers case-insensitively and unified sync/async
+  default-header construction.
+- Bounded GCS connector credential files to 64 KiB and snapshot them into
+  immutable multipart bytes so idempotent retries replay the exact body.
+
 ## 1.1.0
 
 - Added an optional `source_connector_id` argument to synchronous and asynchronous

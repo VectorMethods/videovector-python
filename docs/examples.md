@@ -12,6 +12,10 @@ python examples/01_quickstart_upload_search.py
 
 Some examples require additional values, such as `VIDEO_VECTOR_MEDIA_FILE`, connector credentials, or webhook URLs. Each file declares its required environment variables near the top of `main()`.
 
+`20_run_scoped_segment_playback.py` demonstrates
+`BatchVideoSegmentsTarget`, the resolved `VideoSegments.run_id`, and bounded
+signed playback grants without mixing segments from different prompt runs.
+
 ## Safety Rules
 
 - Use test or least-privilege credentials when experimenting.

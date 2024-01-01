@@ -21,19 +21,20 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-          cache-dependency-path: pyproject.toml
+          cache-dependency-path: requirements-dev.lock
 
-      - name: Install dependencies
+      - name: Install hash-locked dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          python -m pip install --upgrade pip==25.3
+          python -m pip install --require-hashes -r requirements-dev.lock
+          python -m pip install --no-deps --no-build-isolation -e .
 
       - name: Ruff
         run: ruff check videovector tests examples
@@ -45,7 +46,7 @@ jobs:
         run: pytest -q tests
 
       - name: Build artifacts
-        run: python -m build
+        run: python -m build --no-isolation
 
       - name: Twine check
         run: python -m twine check dist/*
@@ -54,16 +55,26 @@ jobs:
     name: Secret scan
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    permissions:
-      contents: read
-      security-events: write
-      pull-requests: read
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
+
+      - name: Scan history and filesystem with checksum-pinned Gitleaks
+        run: |
+          set -euo pipefail
+          mkdir -m 0700 /tmp/gitleaks
+          curl --proto '=https' --tlsv1.2 --retry 3 --retry-all-errors -fsSLo /tmp/gitleaks.tar.gz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz
+          tar --no-same-owner -xzf /tmp/gitleaks.tar.gz -C /tmp/gitleaks gitleaks
+          test -f /tmp/gitleaks/gitleaks
+          test ! -L /tmp/gitleaks/gitleaks
+          echo '9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c  /tmp/gitleaks/gitleaks' | sha256sum --check -
+          test "$(/tmp/gitleaks/gitleaks version)" = "8.24.3"
+          /tmp/gitleaks/gitleaks git --no-banner --redact --log-opts=--all .
+          /tmp/gitleaks/gitleaks dir --no-banner --redact .
 
       - name: Secret pattern scan
         run: |

@@ -54,6 +54,7 @@ The SDK reads credentials and operational settings from constructor arguments or
 | Base URL | `VIDEO_VECTOR_BASE_URL` | Defaults to `https://api.vectormethods.com/api/v2`. |
 | Timeout | `VIDEO_VECTOR_TIMEOUT` | Seconds; default is `60`. |
 | Retries | `VIDEO_VECTOR_MAX_RETRIES` | Default is `3`. |
+| Maximum retry delay | `VIDEO_VECTOR_MAX_RETRY_DELAY` | Seconds; default is `300`. Applies to exponential backoff and both `Retry-After` formats. |
 
 Explicit constructor arguments override environment values:
 
@@ -65,10 +66,14 @@ client = VideoVector(
     base_url="https://api.vectormethods.com/api/v2",
     timeout=90,
     max_retries=5,
+    max_retry_delay=120,
+    custom_headers={"X-Trace-Context": "request-group-1"},
 )
 ```
 
 Configure one auth mode at a time. If both an API key and bearer token are present, set `auth_mode` or `VIDEO_VECTOR_AUTH_MODE`.
+Custom headers cannot override authentication, content framing, user agent,
+idempotency, or other SDK-owned headers.
 
 ## Resource Overview
 
@@ -86,6 +91,26 @@ Configure one auth mode at a time. If both an API key and bearer token are prese
 - `client.rate_limits`: rate-limit status and refresh.
 
 Endpoint-by-endpoint coverage is documented in [docs/backend-parity-matrix.md](docs/backend-parity-matrix.md).
+
+Fetch segments for exact prompt runs without mixing results from a newer run:
+
+```python
+from videovector import BatchVideoSegmentsTarget
+
+responses = client.videos.batch_segments_for_targets(
+    [
+        BatchVideoSegmentsTarget(video_id="video_123", run_id="run_123"),
+        BatchVideoSegmentsTarget(video_id="video_456"),
+    ]
+)
+for response in responses:
+    print(response.video_id, response.run_id, len(response.segments))
+```
+
+`videos.batch_segments(video_ids)` remains available for legacy unscoped
+lookups. If a bounded media grant has been exhausted after a failed load,
+request explicit rotation with
+`videos.get_signed_url(gcs_uri, force_refresh=True)`.
 
 Completed first-party exports can be streamed to disk without buffering the
 file or retrying a partially delivered response:
@@ -165,6 +190,11 @@ Automatic retries are enabled for:
 - idempotent methods: `GET`, `HEAD`, `OPTIONS`, `PUT`, and `DELETE`
 - any request that includes an explicit `idempotency_key`
 
+The SDK accepts `Retry-After` as either delay-seconds or an HTTP date and
+clamps the wait to `max_retry_delay`. Async waits propagate cancellation
+immediately. Idempotent multipart retries replay one pre-encoded body rather
+than rereading a file object.
+
 For non-idempotent operations, pass an idempotency key when retrying is safe:
 
 ```python
@@ -185,6 +215,7 @@ The [examples](examples) directory contains runnable, environment-driven example
 - video-level synthesis
 - text, image, multimodal, and filter search
 - GCS, S3, and Azure connectors
+- run-scoped batch segment retrieval and bounded playback grants
 - import jobs, exports, webhooks, idempotency, failed-segment recovery, usage, and rate limits
 
 Examples intentionally use placeholders and environment variables. Do not hardcode credentials in application code.

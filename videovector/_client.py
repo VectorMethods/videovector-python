@@ -128,6 +128,8 @@ class VideoVector:
         base_url: Optional[str] = None,
         timeout: Optional[float] = None,
         max_retries: Optional[int] = None,
+        max_retry_delay: Optional[int] = None,
+        custom_headers: Optional[dict[str, str]] = None,
     ) -> None:
         self._config = ClientConfig.from_env(
             api_key=api_key,
@@ -136,6 +138,8 @@ class VideoVector:
             base_url=base_url,
             timeout=timeout,
             max_retries=max_retries,
+            max_retry_delay=max_retry_delay,
+            custom_headers=custom_headers,
         )
         self._http = SyncHttpClient(self._config)
 
@@ -246,6 +250,8 @@ class AsyncVideoVector:
         base_url: Optional[str] = None,
         timeout: Optional[float] = None,
         max_retries: Optional[int] = None,
+        max_retry_delay: Optional[int] = None,
+        custom_headers: Optional[dict[str, str]] = None,
     ) -> None:
         self._config = ClientConfig.from_env(
             api_key=api_key,
@@ -254,6 +260,8 @@ class AsyncVideoVector:
             base_url=base_url,
             timeout=timeout,
             max_retries=max_retries,
+            max_retry_delay=max_retry_delay,
+            custom_headers=custom_headers,
         )
         self._http = AsyncHttpClient(self._config)
 

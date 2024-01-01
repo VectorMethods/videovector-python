@@ -1,0 +1,291 @@
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import io
+import json
+import re
+import tarfile
+import zipfile
+from argparse import Namespace
+from importlib import metadata as importlib_metadata
+from pathlib import Path
+from types import ModuleType
+from typing import Any
+
+import pytest
+from packaging.requirements import Requirement
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.9 and 3.10
+    import tomli as tomllib
+
+
+def _release_module() -> ModuleType:
+    script = Path(__file__).parents[1] / "scripts" / "release_artifacts.py"
+    spec = importlib.util.spec_from_file_location("release_artifacts", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+release = _release_module()
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _fake_bundle(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
+    bundle = tmp_path / "bundle"
+    dist = bundle / "dist"
+    dist.mkdir(parents=True)
+    wheel = dist / "package-1.0-py3-none-any.whl"
+    sdist = dist / "package-1.0.tar.gz"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr(
+            "package-1.0.dist-info/METADATA",
+            "Name: package\nVersion: 1.0\nRequires-Python: >=3.9\n",
+        )
+        archive.writestr("package/__init__.py", "")
+    with tarfile.open(sdist, "w:gz") as archive:
+        payload = b"Name: package\nVersion: 1.0\nRequires-Python: >=3.9\n"
+        metadata = tarfile.TarInfo("package-1.0/PKG-INFO")
+        metadata.size = len(payload)
+        archive.addfile(metadata, io.BytesIO(payload))
+
+    def descriptor(path: Path, package_type: str) -> dict[str, Any]:
+        return {
+            "filename": path.name,
+            "path": f"dist/{path.name}",
+            "packagetype": package_type,
+            "sha256": _sha256(path),
+            "size": path.stat().st_size,
+        }
+
+    descriptors = [
+        descriptor(wheel, "bdist_wheel"),
+        descriptor(sdist, "sdist"),
+    ]
+    metadata = {
+        "schema_version": "1.0.0",
+        "package": {"name": "package", "version": "1.0", "requires_python": ">=3.9"},
+        "artifacts": [
+            {key: descriptor[key] for key in ("filename", "packagetype", "sha256", "size")}
+            for descriptor in descriptors
+        ],
+    }
+    metadata_path = bundle / "registry-metadata.json"
+    metadata_path.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    manifest = {
+        "schema_version": "1.0.0",
+        "package": {"name": "package", "version": "1.0"},
+        "repository": "VectorMethods/videovector-python",
+        "source_sha": "a" * 40,
+        "tag": "videovector-v1.0",
+        "tag_sha": "a" * 40,
+        "source_date_epoch": 1_700_000_000,
+        "release_body_sha256": "b" * 64,
+        "registry_metadata_path": metadata_path.name,
+        "registry_metadata_sha256": _sha256(metadata_path),
+        "artifacts": descriptors,
+        "image_digest": None,
+        "tool_versions": {
+            "python": "3.12.8",
+            "build": "1.4.4",
+            "pip": "25.3",
+            "setuptools": "80.10.2",
+            "twine": "6.2.0",
+            "wheel": "0.47.0",
+        },
+    }
+    (bundle / "release-manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return bundle, metadata
+
+
+def test_wheel_timestamp_normalization_is_deterministic(tmp_path: Path) -> None:
+    first = tmp_path / "first.whl"
+    second = tmp_path / "second.whl"
+    with zipfile.ZipFile(first, "w") as archive:
+        archive.writestr("package/value.py", "VALUE = 1\n")
+        archive.writestr("package-1.0.dist-info/METADATA", "Name: package\nVersion: 1.0\n")
+    with zipfile.ZipFile(second, "w") as archive:
+        archive.writestr("package-1.0.dist-info/METADATA", "Name: package\nVersion: 1.0\n")
+        archive.writestr("package/value.py", "VALUE = 1\n")
+
+    release.normalize_wheel(first, 1_700_000_000)
+    release.normalize_wheel(second, 1_700_000_000)
+
+    assert first.read_bytes() == second.read_bytes()
+
+
+def test_bundle_verification_fails_closed_after_artifact_tampering(
+    tmp_path: Path,
+) -> None:
+    bundle, _metadata = _fake_bundle(tmp_path)
+    wheel = bundle / "dist/package-1.0-py3-none-any.whl"
+
+    release.verify_bundle(bundle)
+    wheel.write_bytes(b"tampered")
+    with pytest.raises(release.ReleaseArtifactError, match="size mismatch|hash mismatch"):
+        release.verify_bundle(bundle)
+
+
+def test_bundle_verification_rejects_noncanonical_paths_and_metadata(
+    tmp_path: Path,
+) -> None:
+    bundle, _metadata = _fake_bundle(tmp_path)
+    manifest_path = bundle / "release-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"][0]["path"] = "dist/../release-manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(release.ReleaseArtifactError, match="path is invalid"):
+        release.verify_bundle(bundle)
+
+    bundle, metadata = _fake_bundle(tmp_path / "metadata")
+    metadata["package"]["requires_python"] = ">=3.12"
+    metadata_path = bundle / "registry-metadata.json"
+    metadata_path.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    manifest_path = bundle / "release-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["registry_metadata_sha256"] = _sha256(metadata_path)
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(release.ReleaseArtifactError, match="registry metadata differs"):
+        release.verify_bundle(bundle)
+
+
+def test_partial_registry_state_resumes_with_only_missing_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle, metadata = _fake_bundle(tmp_path)
+    existing = metadata["artifacts"][0]
+    payload = {
+        "info": {
+            "name": "package",
+            "version": "1.0",
+            "requires_python": ">=3.9",
+        },
+        "urls": [
+            {
+                **existing,
+                "digests": {"sha256": existing["sha256"]},
+            }
+        ],
+    }
+
+    class Response(io.BytesIO):
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            self.close()
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *_args, **_kwargs: Response(json.dumps(payload).encode()),
+    )
+    pending = tmp_path / "pending"
+    status = release.registry_status(
+        Namespace(
+            bundle=str(bundle),
+            registry="pypi",
+            base_url="https://registry.invalid",
+            timeout=1.0,
+            write_missing=str(pending),
+        )
+    )
+
+    assert status == 4
+    assert [path.name for path in pending.iterdir()] == ["package-1.0.tar.gz"]
+
+
+def test_registry_projection_requires_exact_artifact_metadata() -> None:
+    projected = release._registry_projection(
+        {
+            "info": {
+                "name": "videovector",
+                "version": "1.1.0",
+                "requires_python": ">=3.9",
+            },
+            "urls": [
+                {
+                    "filename": "videovector-1.1.0.tar.gz",
+                    "packagetype": "sdist",
+                    "size": 10,
+                    "digests": {"sha256": "c" * 64},
+                }
+            ],
+        }
+    )
+
+    assert projected["artifacts"] == [
+        {
+            "filename": "videovector-1.1.0.tar.gz",
+            "packagetype": "sdist",
+            "size": 10,
+            "sha256": "c" * 64,
+        }
+    ]
+
+
+def test_hash_lock_matches_exact_build_and_development_toolchain() -> None:
+    root = Path(__file__).parents[1]
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    lock_text = (root / "requirements-dev.lock").read_text(encoding="utf-8")
+    locked = {
+        re.sub(r"[-_.]+", "-", match.group("name")).lower(): match.group("version")
+        for line in lock_text.splitlines()
+        if (
+            match := re.fullmatch(
+                r"(?P<name>[A-Za-z0-9_.-]+)==(?P<version>[^ ;\\]+)(?:\s.*)?",
+                line,
+            )
+        )
+    }
+
+    exact_requirements = [
+        *project["build-system"]["requires"],
+        *project["project"]["optional-dependencies"]["dev"],
+    ]
+    for raw_requirement in exact_requirements:
+        requirement = Requirement(raw_requirement)
+        specifiers = list(requirement.specifier)
+        assert len(specifiers) == 1 and specifiers[0].operator == "==", raw_requirement
+        normalized_name = re.sub(r"[-_.]+", "-", requirement.name).lower()
+        assert locked[normalized_name] == specifiers[0].version
+
+    for raw_requirement in project["project"]["dependencies"]:
+        requirement = Requirement(raw_requirement)
+        installed_version = importlib_metadata.version(requirement.name)
+        assert requirement.specifier.contains(installed_version)
+        normalized_name = re.sub(r"[-_.]+", "-", requirement.name).lower()
+        assert locked[normalized_name] == installed_version
+
+
+def test_release_jobs_checkout_the_guarded_source_sha() -> None:
+    workflow = (Path(__file__).parents[1] / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert workflow.count("ref: ${{ inputs.release_tag }}") == 1
+    assert workflow.count("ref: ${{ needs.guard.outputs.source_sha }}") == 3

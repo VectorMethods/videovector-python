@@ -6,7 +6,11 @@ Low-level HTTP client with retry logic, authentication, and error handling.
 
 from __future__ import annotations
 
+import asyncio
+import math
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, AsyncIterator, Dict, Iterator, Optional
 
 import httpx
@@ -20,6 +24,26 @@ from ._exceptions import (
     _raise_for_status,
 )
 from ._version import __version__
+
+_DEFAULT_RETRY_AFTER_SECONDS = 60
+
+
+def _default_headers_for_config(config: ClientConfig) -> Dict[str, str]:
+    """Build one canonical header set for both sync and async transports."""
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": f"videovector-python/{__version__}",
+    }
+    if config.auth_mode == "bearer" and config.bearer_token:
+        headers["Authorization"] = f"Bearer {config.bearer_token}"
+    elif config.auth_mode == "api_key" and config.api_key:
+        headers["X-API-Key"] = config.api_key
+    elif config.bearer_token:
+        headers["Authorization"] = f"Bearer {config.bearer_token}"
+    elif config.api_key:
+        headers["X-API-Key"] = config.api_key
+    headers.update(config.custom_headers)
+    return headers
 
 
 class SyncHttpClient:
@@ -39,26 +63,7 @@ class SyncHttpClient:
         return self._config.base_url
 
     def _default_headers(self) -> Dict[str, str]:
-        headers = {
-            "Accept": "application/json",
-            "User-Agent": f"videovector-python/{__version__}",
-        }
-        if self._config.auth_mode == "bearer" and self._config.bearer_token:
-            headers["Authorization"] = f"Bearer {self._config.bearer_token}"
-        elif self._config.auth_mode == "api_key" and self._config.api_key:
-            headers["X-API-Key"] = self._config.api_key
-        elif self._config.bearer_token:
-            headers["Authorization"] = f"Bearer {self._config.bearer_token}"
-        elif self._config.api_key:
-            headers["X-API-Key"] = self._config.api_key
-
-        custom_headers = {
-            key: value
-            for key, value in self._config.custom_headers.items()
-            if key.lower() != "content-type"
-        }
-        headers.update(custom_headers)
-        return headers
+        return _default_headers_for_config(self._config)
 
     def _request(
         self,
@@ -90,6 +95,20 @@ class SyncHttpClient:
                 if key.lower() != "content-type"
             }
 
+        multipart_content: Optional[bytes] = None
+        if files and allow_retry:
+            prepared_request = self._client.build_request(
+                method=method,
+                url=endpoint,
+                params=_clean_params(params),
+                data=data,
+                files=files,
+                headers=request_headers if request_headers else None,
+            )
+            multipart_content = prepared_request.read()
+            request_headers["Content-Type"] = prepared_request.headers["Content-Type"]
+            request_headers["Content-Length"] = str(len(multipart_content))
+
         last_exception: Optional[Exception] = None
         retry_count = 0
 
@@ -99,14 +118,18 @@ class SyncHttpClient:
                     method=method,
                     url=endpoint,
                     params=_clean_params(params),
-                    json=json,
-                    data=data,
-                    files=files,
+                    json=json if multipart_content is None else None,
+                    data=data if multipart_content is None else None,
+                    files=files if multipart_content is None else None,
+                    content=multipart_content,
                     headers=request_headers if request_headers else None,
                 )
 
                 if response.status_code == 429:
-                    retry_after = _get_retry_after(response)
+                    retry_after = _get_retry_after(
+                        response,
+                        max_delay=self._config.max_retry_delay,
+                    )
                     if allow_retry and retry_count < self._config.max_retries:
                         time.sleep(retry_after)
                         retry_count += 1
@@ -119,7 +142,7 @@ class SyncHttpClient:
                     and retry_count < self._config.max_retries
                 ):
                     retry_count += 1
-                    time.sleep(2**retry_count)
+                    time.sleep(min(2**retry_count, self._config.max_retry_delay))
                     continue
 
                 if response.status_code >= 400:
@@ -135,7 +158,7 @@ class SyncHttpClient:
                 last_exception = TimeoutError(f"Request timed out: {e}")
                 if allow_retry and retry_count < self._config.max_retries:
                     retry_count += 1
-                    time.sleep(2**retry_count)
+                    time.sleep(min(2**retry_count, self._config.max_retry_delay))
                     continue
                 raise last_exception
 
@@ -143,7 +166,7 @@ class SyncHttpClient:
                 last_exception = ConnectionError(f"Connection failed: {e}")
                 if allow_retry and retry_count < self._config.max_retries:
                     retry_count += 1
-                    time.sleep(2**retry_count)
+                    time.sleep(min(2**retry_count, self._config.max_retry_delay))
                     continue
                 raise last_exception
 
@@ -154,7 +177,7 @@ class SyncHttpClient:
                 last_exception = VideoVectorError(f"Request failed: {e}")
                 if allow_retry and retry_count < self._config.max_retries:
                     retry_count += 1
-                    time.sleep(2**retry_count)
+                    time.sleep(min(2**retry_count, self._config.max_retry_delay))
                     continue
                 raise last_exception
 
@@ -198,7 +221,10 @@ class SyncHttpClient:
                             status_code=response.status_code,
                             error_code="unexpected_download_status",
                         )
-                    _raise_stream_error(response)
+                    _raise_stream_error(
+                        response,
+                        max_retry_delay=self._config.max_retry_delay,
+                    )
                 expected_length = _validate_download_response_headers(
                     response,
                     max_bytes=max_bytes,
@@ -318,26 +344,7 @@ class AsyncHttpClient:
         return self._config.base_url
 
     def _default_headers(self) -> Dict[str, str]:
-        headers = {
-            "Accept": "application/json",
-            "User-Agent": f"videovector-python/{__version__}",
-        }
-        if self._config.auth_mode == "bearer" and self._config.bearer_token:
-            headers["Authorization"] = f"Bearer {self._config.bearer_token}"
-        elif self._config.auth_mode == "api_key" and self._config.api_key:
-            headers["X-API-Key"] = self._config.api_key
-        elif self._config.bearer_token:
-            headers["Authorization"] = f"Bearer {self._config.bearer_token}"
-        elif self._config.api_key:
-            headers["X-API-Key"] = self._config.api_key
-
-        custom_headers = {
-            key: value
-            for key, value in self._config.custom_headers.items()
-            if key.lower() != "content-type"
-        }
-        headers.update(custom_headers)
-        return headers
+        return _default_headers_for_config(self._config)
 
     async def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -361,8 +368,6 @@ class AsyncHttpClient:
         idempotency_key: Optional[str] = None,
     ) -> Any:
         """Execute HTTP request with retry logic."""
-        import asyncio
-
         normalized_method = method.upper()
         allow_retry = _should_retry_request(normalized_method, idempotency_key)
 
@@ -381,6 +386,20 @@ class AsyncHttpClient:
                 if key.lower() != "content-type"
             }
 
+        multipart_content: Optional[bytes] = None
+        if files and allow_retry:
+            prepared_request = client.build_request(
+                method=method,
+                url=endpoint,
+                params=_clean_params(params),
+                data=data,
+                files=files,
+                headers=request_headers if request_headers else None,
+            )
+            multipart_content = await prepared_request.aread()
+            request_headers["Content-Type"] = prepared_request.headers["Content-Type"]
+            request_headers["Content-Length"] = str(len(multipart_content))
+
         last_exception: Optional[Exception] = None
         retry_count = 0
 
@@ -390,14 +409,18 @@ class AsyncHttpClient:
                     method=method,
                     url=endpoint,
                     params=_clean_params(params),
-                    json=json,
-                    data=data,
-                    files=files,
+                    json=json if multipart_content is None else None,
+                    data=data if multipart_content is None else None,
+                    files=files if multipart_content is None else None,
+                    content=multipart_content,
                     headers=request_headers if request_headers else None,
                 )
 
                 if response.status_code == 429:
-                    retry_after = _get_retry_after(response)
+                    retry_after = _get_retry_after(
+                        response,
+                        max_delay=self._config.max_retry_delay,
+                    )
                     if allow_retry and retry_count < self._config.max_retries:
                         await asyncio.sleep(retry_after)
                         retry_count += 1
@@ -410,7 +433,7 @@ class AsyncHttpClient:
                     and retry_count < self._config.max_retries
                 ):
                     retry_count += 1
-                    await asyncio.sleep(2**retry_count)
+                    await asyncio.sleep(min(2**retry_count, self._config.max_retry_delay))
                     continue
 
                 if response.status_code >= 400:
@@ -426,7 +449,7 @@ class AsyncHttpClient:
                 last_exception = TimeoutError(f"Request timed out: {e}")
                 if allow_retry and retry_count < self._config.max_retries:
                     retry_count += 1
-                    await asyncio.sleep(2**retry_count)
+                    await asyncio.sleep(min(2**retry_count, self._config.max_retry_delay))
                     continue
                 raise last_exception
 
@@ -434,7 +457,7 @@ class AsyncHttpClient:
                 last_exception = ConnectionError(f"Connection failed: {e}")
                 if allow_retry and retry_count < self._config.max_retries:
                     retry_count += 1
-                    await asyncio.sleep(2**retry_count)
+                    await asyncio.sleep(min(2**retry_count, self._config.max_retry_delay))
                     continue
                 raise last_exception
 
@@ -445,7 +468,7 @@ class AsyncHttpClient:
                 last_exception = VideoVectorError(f"Request failed: {e}")
                 if allow_retry and retry_count < self._config.max_retries:
                     retry_count += 1
-                    await asyncio.sleep(2**retry_count)
+                    await asyncio.sleep(min(2**retry_count, self._config.max_retry_delay))
                     continue
                 raise last_exception
 
@@ -490,7 +513,10 @@ class AsyncHttpClient:
                             status_code=response.status_code,
                             error_code="unexpected_download_status",
                         )
-                    _raise_stream_error(response)
+                    _raise_stream_error(
+                        response,
+                        max_retry_delay=self._config.max_retry_delay,
+                    )
                 expected_length = _validate_download_response_headers(
                     response,
                     max_bytes=max_bytes,
@@ -706,11 +732,15 @@ def _validate_streamed_length(
         )
 
 
-def _raise_stream_error(response: httpx.Response) -> None:
+def _raise_stream_error(
+    response: httpx.Response,
+    *,
+    max_retry_delay: int,
+) -> None:
     if response.status_code == 429:
         _raise_rate_limit_response(
             response,
-            retry_after=_get_retry_after(response),
+            retry_after=_get_retry_after(response, max_delay=max_retry_delay),
         )
     body = _decode_error_body(
         response,
@@ -765,15 +795,36 @@ def _clean_params(params: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return {k: v for k, v in params.items() if v is not None}
 
 
-def _get_retry_after(response: httpx.Response) -> int:
-    """Extract retry-after value from response headers."""
-    retry_after = response.headers.get("Retry-After")
+def _get_retry_after(
+    response: httpx.Response,
+    *,
+    max_delay: int,
+    now: Optional[datetime] = None,
+) -> int:
+    """Parse Retry-After delay-seconds or HTTP-date and clamp it safely."""
+    retry_after = response.headers.get("Retry-After", "").strip()
+    parsed_delay: Optional[int] = None
     if retry_after:
         try:
-            return int(retry_after)
+            parsed_delay = max(0, int(retry_after))
         except ValueError:
-            pass
-    return 60  # Default to 60 seconds
+            try:
+                retry_at = parsedate_to_datetime(retry_after)
+                if retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(tzinfo=timezone.utc)
+                current = now or datetime.now(timezone.utc)
+                if current.tzinfo is None:
+                    current = current.replace(tzinfo=timezone.utc)
+                parsed_delay = max(
+                    0,
+                    math.ceil((retry_at - current).total_seconds()),
+                )
+            except (TypeError, ValueError, OverflowError):
+                parsed_delay = None
+
+    if parsed_delay is None:
+        parsed_delay = _DEFAULT_RETRY_AFTER_SECONDS
+    return min(parsed_delay, max_delay)
 
 
 def _should_retry_request(method: str, idempotency_key: Optional[str]) -> bool:

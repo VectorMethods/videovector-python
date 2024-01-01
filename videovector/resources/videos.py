@@ -16,6 +16,7 @@ from .._pagination import (
     _parse_paginated_response_async,
 )
 from .._types import (
+    BatchVideoSegmentsTarget,
     DeleteResponse,
     ProcessingStartedResponse,
     PromptRun,
@@ -30,6 +31,24 @@ from .._types import (
 
 if TYPE_CHECKING:
     from .._http import AsyncHttpClient, SyncHttpClient
+
+
+def _batch_segments_payload(
+    *,
+    video_ids: Optional[List[str]] = None,
+    targets: Optional[List[BatchVideoSegmentsTarget]] = None,
+) -> dict[str, Any]:
+    if video_ids is not None and targets is not None:
+        raise ValueError("video_ids and targets are mutually exclusive")
+    if targets is not None:
+        if not targets:
+            raise ValueError("targets must not be empty")
+        return {"targets": [target.model_dump(exclude_none=True) for target in targets]}
+    if video_ids is not None:
+        if not video_ids:
+            raise ValueError("video_ids must not be empty")
+        return {"video_ids": video_ids}
+    raise ValueError("Either video_ids or targets must be provided")
 
 
 class VideosResource:
@@ -287,10 +306,29 @@ class VideosResource:
         Returns:
             List[VideoSegments]: List of video segments with video_id and segments list
         """
-        response = self._client.post("/videos/batch/segments", json={"video_ids": video_ids})
+        response = self._client.post(
+            "/videos/batch/segments",
+            json=_batch_segments_payload(video_ids=video_ids),
+        )
         return [VideoSegments.model_validate(v) for v in response]
 
-    def get_signed_url(self, gcs_uri: str) -> SignedUrl:
+    def batch_segments_for_targets(
+        self,
+        targets: List[BatchVideoSegmentsTarget],
+    ) -> List[VideoSegments]:
+        """Get segments for media targets, optionally scoped to prompt runs."""
+        response = self._client.post(
+            "/videos/batch/segments",
+            json=_batch_segments_payload(targets=targets),
+        )
+        return [VideoSegments.model_validate(v) for v in response]
+
+    def get_signed_url(
+        self,
+        gcs_uri: str,
+        *,
+        force_refresh: bool = False,
+    ) -> SignedUrl:
         """
         Generate a signed URL for accessing a GCS resource.
 
@@ -300,7 +338,10 @@ class VideosResource:
         Returns:
             SignedUrl: Signed URL with expiration
         """
-        response = self._client.post("/videos/signed-url", json={"gcs_uri": gcs_uri})
+        payload: dict[str, Any] = {"gcs_uri": gcs_uri}
+        if force_refresh:
+            payload["force_refresh"] = True
+        response = self._client.post("/videos/signed-url", json=payload)
         return SignedUrl.model_validate(response)
 
     def list_prompt_runs(self, video_id: str, *, limit: Optional[int] = None) -> List[PromptRun]:
@@ -492,12 +533,34 @@ class AsyncVideosResource:
         video_ids: List[str],
     ) -> List[VideoSegments]:
         """Get segments for multiple videos."""
-        response = await self._client.post("/videos/batch/segments", json={"video_ids": video_ids})
+        response = await self._client.post(
+            "/videos/batch/segments",
+            json=_batch_segments_payload(video_ids=video_ids),
+        )
         return [VideoSegments.model_validate(v) for v in response]
 
-    async def get_signed_url(self, gcs_uri: str) -> SignedUrl:
+    async def batch_segments_for_targets(
+        self,
+        targets: List[BatchVideoSegmentsTarget],
+    ) -> List[VideoSegments]:
+        """Get segments for media targets, optionally scoped to prompt runs."""
+        response = await self._client.post(
+            "/videos/batch/segments",
+            json=_batch_segments_payload(targets=targets),
+        )
+        return [VideoSegments.model_validate(v) for v in response]
+
+    async def get_signed_url(
+        self,
+        gcs_uri: str,
+        *,
+        force_refresh: bool = False,
+    ) -> SignedUrl:
         """Generate a signed URL for accessing a GCS resource."""
-        response = await self._client.post("/videos/signed-url", json={"gcs_uri": gcs_uri})
+        payload: dict[str, Any] = {"gcs_uri": gcs_uri}
+        if force_refresh:
+            payload["force_refresh"] = True
+        response = await self._client.post("/videos/signed-url", json=payload)
         return SignedUrl.model_validate(response)
 
     async def list_prompt_runs(

@@ -1227,8 +1227,18 @@ class VideoStatus(BaseModel):
     processing_status: Optional[List[PromptRunProcessingStatus]] = None
 
 
+class BatchVideoSegmentsTarget(BaseModel):
+    """Run-scoped media target for batch segment retrieval."""
+
+    model_config = ConfigDict(frozen=True)
+
+    video_id: str
+    run_id: Optional[str] = None
+
+
 class VideoSegments(BaseModel):
     """Video with its segments for batch operations."""
 
     video_id: str
+    run_id: Optional[str] = None
     segments: List[Segment]
