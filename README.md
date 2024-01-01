@@ -55,8 +55,9 @@ The SDK reads credentials and operational settings from constructor arguments or
 | Setting | Environment variable | Notes |
 |---|---|---|
 | API key | `VIDEO_VECTOR_API_KEY` | Recommended for server-to-server workflow calls. |
-| JWT bearer token | `VIDEO_VECTOR_BEARER_TOKEN` | Required for JWT-only endpoints such as API key management. |
-| Auth mode | `VIDEO_VECTOR_AUTH_MODE` | Optional; use `api_key` or `bearer` when both credentials are present. |
+| Static bearer token | `VIDEO_VECTOR_BEARER_TOKEN` | A short-lived WorkOS OAuth access token or Firebase ID token. Prefer a provider for long-lived OAuth clients. |
+| OAuth token provider | Constructor only | Callable that obtains a current WorkOS access token for each HTTP attempt. |
+| Auth mode | `VIDEO_VECTOR_AUTH_MODE` | Optional; use `api_key` or `bearer` when an API key and one bearer source are both configured. |
 | Base URL | `VIDEO_VECTOR_BASE_URL` | Defaults to `https://api.vectormethods.com/api/v2`. |
 | Timeout | `VIDEO_VECTOR_TIMEOUT` | Seconds; default is `60`. |
 | Retries | `VIDEO_VECTOR_MAX_RETRIES` | Default is `3`. |
@@ -77,9 +78,59 @@ client = VideoVector(
 )
 ```
 
-Configure one auth mode at a time. If both an API key and bearer token are present, set `auth_mode` or `VIDEO_VECTOR_AUTH_MODE`.
+Configure one auth mode at a time. If an API key and one bearer source are both
+present, set `auth_mode` or `VIDEO_VECTOR_AUTH_MODE`. A static bearer token and
+an OAuth token provider are mutually exclusive because they represent the same
+wire credential.
 Custom headers cannot override authentication, content framing, user agent,
 idempotency, or other SDK-owned headers.
+
+### WorkOS OAuth
+
+OAuth is appropriate when an application acts for a signed-in VideoVector user.
+The SDK accepts an externally managed WorkOS access token, but deliberately does
+not open a browser, run Firebase login, perform DCR/PKCE, or persist refresh
+tokens. Keep that lifecycle in the host application's established OAuth/OIDC
+library and secure credential store.
+
+For a long-lived synchronous client, pass a callable that returns a current raw
+access token. The SDK invokes it once for every wire attempt, including retries:
+
+```python
+from videovector import VideoVector
+
+# Application-owned adapter around Authlib (or another maintained OAuth
+# library). This is not an SDK or Authlib method: the adapter must refresh
+# before expiry and return only the raw token, without the "Bearer " prefix.
+def current_access_token() -> str:
+    return oauth_adapter.current_access_token()
+
+client = VideoVector(oauth_token_provider=current_access_token)
+```
+
+The async client accepts either a non-blocking synchronous callable or an async
+callable:
+
+```python
+from videovector import AsyncVideoVector
+
+async def current_access_token() -> str:
+    return await oauth_adapter.current_access_token()
+
+client = AsyncVideoVector(oauth_token_provider=current_access_token)
+```
+
+The authorization server and resource are discoverable from
+`https://api.vectormethods.com/.well-known/oauth-protected-resource/mcp`.
+Production access tokens are issued for the canonical resource
+`https://api.vectormethods.com/mcp` and are accepted on tenant-scoped SDK
+operations. OAuth represents the signed-in account and is not restricted by
+legacy API-key scopes; existing VideoVector billing, plan entitlements, and
+account state remain authoritative. Platform-admin and Firebase-session-only
+operations remain excluded. In particular, `client.api_keys` requires a
+verified Firebase ID token, while the current `client.rate_limits` backend
+routes require an API key or Firebase ID token rather than a WorkOS access
+token.
 
 ## Resource Overview
 
@@ -93,9 +144,11 @@ idempotency, or other SDK-owned headers.
 - `client.import_jobs`: bulk import from configured connectors.
 - `client.exports`: index and prompt-run metadata exports with bounded authenticated streaming.
 - `client.webhooks`: webhook CRUD, delivery inspection, retries, event discovery, and secret rotation.
-- `client.api_keys`: API key CRUD, rotate, revoke, and delete with bearer auth.
+- `client.api_keys`: API key CRUD, rotate, revoke, and delete with a verified
+  Firebase ID token (WorkOS OAuth is intentionally not accepted here).
 - `client.usage`: usage metrics, history, details, and breakdowns.
-- `client.rate_limits`: rate-limit status and refresh.
+- `client.rate_limits`: rate-limit status and refresh with an API key or
+  Firebase ID token; the current backend routes do not accept WorkOS OAuth.
 
 Endpoint-by-endpoint coverage is documented in [docs/backend-parity-matrix.md](docs/backend-parity-matrix.md).
 

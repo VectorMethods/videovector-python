@@ -20,12 +20,13 @@ class ApiKeysResource:
 
     Provides methods for managing API keys for programmatic access.
 
-    Note: API key management requires JWT authentication (web login).
-    API keys cannot create or manage other API keys.
+    Note: API key management requires a verified Firebase ID token from the web
+    login. WorkOS OAuth access tokens and API keys cannot create or manage API
+    keys.
 
     Example:
-        # Using JWT authentication
-        client = VideoVector(bearer_token="firebase_jwt_here")
+        # Using a current Firebase ID token
+        client = VideoVector(bearer_token="firebase_id_token_here")
 
         # Create an API key with read scope
         key = client.api_keys.create(
@@ -71,7 +72,7 @@ class ApiKeysResource:
 
         Raises:
             ValidationError: If parameters are invalid
-            AuthorizationError: If not using JWT authentication
+            AuthorizationError: If not using verified Firebase authentication
         """
         body: Dict[str, Any] = {"name": name}
         if scopes is not None:
@@ -169,7 +170,7 @@ class AsyncApiKeysResource:
     Provides async methods for API key management.
 
     Example:
-        async with AsyncVideoVector(bearer_token="firebase_jwt_here") as client:
+        async with AsyncVideoVector(bearer_token="firebase_id_token_here") as client:
             key = await client.api_keys.create(
                 name="Production Key",
                 scopes=["read", "search"]

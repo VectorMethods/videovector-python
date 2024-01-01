@@ -8,7 +8,9 @@ This document maps the Python SDK surface (`videovector`) to backend API endpoin
 - SDK package: `videovector`
 - Auth modes supported by SDK:
   - API key (`X-API-Key`)
-  - JWT bearer (`Authorization: Bearer ...`)
+  - WorkOS OAuth access token (`Authorization: Bearer ...`), static or provided
+    per attempt by `oauth_token_provider`
+  - Firebase ID token (`Authorization: Bearer ...`) for Firebase-only routes
 
 ## Current Resource Coverage
 
@@ -93,20 +95,20 @@ This document maps the Python SDK surface (`videovector`) to backend API endpoin
 | `webhooks.get_delivery` | `GET` | `/webhooks/deliveries/{delivery_id}` | `WebhookDelivery` | `read` |
 | `webhooks.retry_delivery` | `POST` | `/webhooks/deliveries/{delivery_id}/retry` | `WebhookDelivery` | `write` |
 | `webhooks.list_events` | `GET` | `/webhooks/events` | `List[str]` | Public endpoint |
-| `api_keys.create` | `POST` | `/api-keys` | `ApiKeyWithSecret` | JWT required |
-| `api_keys.retrieve` | `GET` | `/api-keys/{key_id}` | `ApiKey` | JWT required |
-| `api_keys.list` | `GET` | `/api-keys` | `List[ApiKey]` | JWT required |
-| `api_keys.delete` | `DELETE` | `/api-keys/{key_id}` | `DeleteResponse` | JWT required |
-| `api_keys.revoke` | `POST` | `/api-keys/{key_id}/revoke` | `ApiKey` | JWT required |
-| `api_keys.rotate` | `POST` | `/api-keys/{key_id}/rotate` | `ApiKeyWithSecret` | JWT required |
+| `api_keys.create` | `POST` | `/api-keys` | `ApiKeyWithSecret` | Firebase ID token required |
+| `api_keys.retrieve` | `GET` | `/api-keys/{key_id}` | `ApiKey` | Firebase ID token required |
+| `api_keys.list` | `GET` | `/api-keys` | `List[ApiKey]` | Firebase ID token required |
+| `api_keys.delete` | `DELETE` | `/api-keys/{key_id}` | `DeleteResponse` | Firebase ID token required |
+| `api_keys.revoke` | `POST` | `/api-keys/{key_id}/revoke` | `ApiKey` | Firebase ID token required |
+| `api_keys.rotate` | `POST` | `/api-keys/{key_id}/rotate` | `ApiKeyWithSecret` | Firebase ID token required |
 | `videos.list_playground` | `GET` | `/playground/videos` | `SyncPage[Video]`/`AsyncPage[Video]` | `read` |
 | `usage.get_current` | `GET` | `/usage` | `CurrentUsage` | `read` |
 | `usage.get_history` | `GET` | `/usage/history` | `UsageHistory` | `read` |
 | `usage.get_details` | `GET` | `/usage/details` | `List[UsageDetail]` | `read` |
 | `usage.get_breakdown` | `GET` | `/usage/breakdown` | `UsageBreakdown` | `read` |
 | `usage.get_metric_types` | `GET` | `/usage/metric-types` | `List[UsageMetricTypeInfo]` | Public endpoint |
-| `rate_limits.get_status` | `GET` | `/rate-limit/status` | `RateLimitStatus` | authenticated user |
-| `rate_limits.refresh` | `POST` | `/rate-limit/refresh` | `RateLimitStatus` | authenticated user |
+| `rate_limits.get_status` | `GET` | `/rate-limit/status` | `RateLimitStatus` | API key or Firebase ID token (WorkOS OAuth not currently accepted) |
+| `rate_limits.refresh` | `POST` | `/rate-limit/refresh` | `RateLimitStatus` | API key or Firebase ID token (WorkOS OAuth not currently accepted) |
 
 ## Explicitly Unsupported in This SDK
 
@@ -129,7 +131,15 @@ The following backend surfaces are intentionally out of scope for this SDK relea
 ## Notes
 
 - Endpoint auth requirements are enforced by backend middleware and should be treated as authoritative.
-- Some endpoints are authenticated via either API key or JWT bearer, while `/api-keys/*` requires JWT bearer specifically.
+- Tenant-scoped endpoints accept either an appropriately scoped API key,
+  Firebase ID token, or WorkOS OAuth access token. WorkOS OAuth represents the
+  signed-in account and receives full tenant-account access; internal billing,
+  plan, account-state, and ownership checks remain authoritative.
+- `/api-keys/*` requires a verified Firebase ID token specifically. WorkOS
+  OAuth and API keys do not satisfy that boundary.
+- `/rate-limit/status` and `/rate-limit/refresh` retain the backend's legacy
+  authenticated-user dependency and currently accept an API key or Firebase ID
+  token, but not WorkOS OAuth.
 - The public `admin` API-key scope means full access within the owning account; it never grants platform-administrator access.
 - Omitting `source_connector_id` from `videos.create` preserves the original wire payload and remains the correct call for public GCS objects and server-managed uploads/imports.
 - Batch segment requests use either legacy `video_ids` or run-scoped `targets`,
