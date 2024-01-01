@@ -51,7 +51,7 @@ The SDK reads credentials and operational settings from constructor arguments or
 | API key | `VIDEO_VECTOR_API_KEY` | Recommended for server-to-server workflow calls. |
 | JWT bearer token | `VIDEO_VECTOR_BEARER_TOKEN` | Required for JWT-only endpoints such as API key management. |
 | Auth mode | `VIDEO_VECTOR_AUTH_MODE` | Optional; use `api_key` or `bearer` when both credentials are present. |
-| Base URL | `VIDEO_VECTOR_BASE_URL` | Defaults to `https://playground-api-stg-udk7d32fva-uc.a.run.app/api/v2`. |
+| Base URL | `VIDEO_VECTOR_BASE_URL` | Defaults to `https://api.vectormethods.com/api/v2`. |
 | Timeout | `VIDEO_VECTOR_TIMEOUT` | Seconds; default is `60`. |
 | Retries | `VIDEO_VECTOR_MAX_RETRIES` | Default is `3`. |
 
@@ -62,7 +62,7 @@ from videovector import VideoVector
 
 client = VideoVector(
     api_key="<VIDEO_VECTOR_API_KEY>",
-    base_url="https://playground-api-stg-udk7d32fva-uc.a.run.app/api/v2",
+    base_url="https://api.vectormethods.com/api/v2",
     timeout=90,
     max_retries=5,
 )

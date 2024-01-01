@@ -1,7 +1,14 @@
 
+from pathlib import Path
+
 import pytest
 
 from videovector._config import DEFAULT_BASE_URL, ClientConfig
+
+CANONICAL_BASE_URL = "https://api.vectormethods.com/api/v2"
+LEGACY_RAW_STAGE_BASE_URL = (
+    "https://playground-" + "api-stg-" + "udk7d32fva-uc.a.run.app/api/v2"
+)
 
 
 def test_config_accepts_api_key() -> None:
@@ -60,3 +67,31 @@ def test_config_allows_both_credentials_with_explicit_auth_mode() -> None:
 def test_config_uses_verified_default_base_url() -> None:
     cfg = ClientConfig.from_env(api_key="vv_test_api_key")
     assert cfg.base_url == DEFAULT_BASE_URL
+    assert DEFAULT_BASE_URL == CANONICAL_BASE_URL
+
+
+def test_legacy_raw_stage_url_is_absent_from_repo_text() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    ignored_parts = {
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".venv",
+        "__pycache__",
+        "build",
+        "dist",
+    }
+    offenders: list[str] = []
+
+    for path in repo_root.rglob("*"):
+        if not path.is_file() or ignored_parts.intersection(path.parts):
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if LEGACY_RAW_STAGE_BASE_URL in content:
+            offenders.append(str(path.relative_to(repo_root)))
+
+    assert offenders == []

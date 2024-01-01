@@ -805,14 +805,33 @@ class PromptSemanticIndexingConfigInput(TypedDict, total=False):
     disabled_video_level_fields: List[str]
 
 
+FilterOperator = Literal[
+    "contains",
+    "ends_with",
+    "equals",
+    "greater_equal",
+    "greater_than",
+    "is_empty",
+    "is_not_empty",
+    "item_contains",
+    "item_equals",
+    "length_equals",
+    "length_greater",
+    "length_less",
+    "less_equal",
+    "less_than",
+    "starts_with",
+]
+FilterValueType = Literal["string", "integer", "number", "boolean", "array"]
+
+
 class FilterCondition(TypedDict, total=False):
     """Filter condition for filter search."""
 
     field: str
-    operator: str
+    operator: FilterOperator
     value: Any
-    type: Literal["unknown", "string", "integer", "number", "boolean", "array"]
-    fuzzyMatch: Optional[bool]
+    type: FilterValueType
 
 
 # =============================================================================

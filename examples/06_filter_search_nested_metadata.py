@@ -22,7 +22,7 @@ def main() -> None:
                 },
                 {
                     "field": "compliance.score",
-                    "operator": "gte",
+                    "operator": "greater_equal",
                     "value": 0.8,
                     "type": "number",
                 },
@@ -35,4 +35,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

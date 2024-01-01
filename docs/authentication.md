@@ -31,9 +31,8 @@ client = VideoVector(bearer_token=os.environ["VIDEO_VECTOR_BEARER_TOKEN"])
 - `VIDEO_VECTOR_TIMEOUT`
 - `VIDEO_VECTOR_MAX_RETRIES`
 
-The default base URL is `https://playground-api-stg-udk7d32fva-uc.a.run.app/api/v2`. Override it with `VIDEO_VECTOR_BASE_URL` or the `base_url` constructor argument when targeting another deployment.
+The default base URL is `https://api.vectormethods.com/api/v2`. Override it with `VIDEO_VECTOR_BASE_URL` or the `base_url` constructor argument when targeting another deployment.
 
 ## Secret Handling
 
 Do not log full API keys, bearer tokens, cloud provider credentials, webhook signing secrets, or signed export URLs. Values returned by API key creation, API key rotation, webhook creation, and webhook secret rotation should be persisted immediately to your own secret store.
-

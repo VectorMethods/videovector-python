@@ -6,11 +6,14 @@ Provides methods for text, image, multimodal, and filter-based search.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+import math
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional, Tuple, cast
 
 from .._types import (
     FilterCondition,
+    FilterOperator,
     FilterSearchResponse,
+    FilterValueType,
     ImageSearchResult,
     MultimodalSearchResult,
     SearchResult,
@@ -20,22 +23,169 @@ if TYPE_CHECKING:
     from .._http import AsyncHttpClient, SyncHttpClient
 
 
+_MAX_FILTER_CONDITIONS = 4
+_FILTER_CONDITION_KEYS = {"field", "operator", "value", "type"}
+_FILTER_OPERATORS_BY_TYPE: Dict[str, Tuple[str, ...]] = {
+    "string": (
+        "equals",
+        "contains",
+        "starts_with",
+        "ends_with",
+        "is_empty",
+        "is_not_empty",
+    ),
+    "integer": ("equals", "greater_than", "greater_equal", "less_than", "less_equal"),
+    "number": ("equals", "greater_than", "greater_equal", "less_than", "less_equal"),
+    "boolean": ("equals",),
+    "array": (
+        "item_equals",
+        "item_contains",
+        "length_equals",
+        "length_greater",
+        "length_less",
+        "is_empty",
+        "is_not_empty",
+    ),
+}
+_VALUELESS_FILTER_OPERATORS = {"is_empty", "is_not_empty"}
+_ARRAY_LENGTH_FILTER_OPERATORS = {"length_equals", "length_greater", "length_less"}
+
+
+def _is_json_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _is_json_integer(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _has_filter_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
+
+
+def _validate_filter_value_type(value_type: str, operator: str, value: Any, index: int) -> None:
+    prefix = f"Condition {index + 1}"
+    if value_type == "string":
+        if not isinstance(value, str):
+            raise ValueError(f"{prefix}: value for type 'string' must be a string")
+        return
+
+    if value_type == "integer":
+        if not _is_json_integer(value):
+            raise ValueError(f"{prefix}: value for type 'integer' must be an integer")
+        return
+
+    if value_type == "number":
+        if not _is_json_number(value):
+            raise ValueError(f"{prefix}: value for type 'number' must be a finite number")
+        return
+
+    if value_type == "boolean":
+        if not isinstance(value, bool):
+            raise ValueError(f"{prefix}: value for type 'boolean' must be a boolean")
+        return
+
+    if value_type == "array":
+        if operator in _ARRAY_LENGTH_FILTER_OPERATORS:
+            if not _is_json_integer(value) or value < 0:
+                raise ValueError(
+                    f"{prefix}: value for array length operators must be a non-negative integer"
+                )
+            return
+        if operator == "item_contains" and not isinstance(value, str):
+            raise ValueError(f"{prefix}: value for operator 'item_contains' must be a string")
+        if operator == "item_equals" and (
+            value is None or isinstance(value, (list, dict)) or not isinstance(value, (str, int, float, bool))
+        ):
+            raise ValueError(
+                f"{prefix}: value for operator 'item_equals' must be a string, number, or boolean"
+            )
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError(f"{prefix}: value for operator '{operator}' must be finite")
+
+
+def _validate_filter_condition(condition: object, index: int) -> FilterCondition:
+    if not isinstance(condition, Mapping):
+        raise ValueError(f"Condition {index + 1}: must be an object")
+
+    unknown_keys = set(condition) - _FILTER_CONDITION_KEYS
+    if unknown_keys:
+        formatted_keys = ", ".join(sorted(str(key) for key in unknown_keys))
+        raise ValueError(f"Condition {index + 1}: unsupported fields: {formatted_keys}")
+
+    field = condition.get("field")
+    if not isinstance(field, str) or not field.strip():
+        raise ValueError(f"Condition {index + 1}: field is required and must be a non-empty string")
+
+    operator = condition.get("operator")
+    if not isinstance(operator, str) or not operator:
+        raise ValueError(f"Condition {index + 1}: operator is required and must be a string")
+
+    value_type = condition.get("type")
+    if not isinstance(value_type, str) or not value_type:
+        raise ValueError(f"Condition {index + 1}: type is required and must be a string")
+
+    operators = _FILTER_OPERATORS_BY_TYPE.get(value_type)
+    if operators is None:
+        supported_types = ", ".join(_FILTER_OPERATORS_BY_TYPE)
+        raise ValueError(
+            f"Condition {index + 1}: unsupported filter type '{value_type}'. "
+            f"Supported types: {supported_types}"
+        )
+    if operator not in operators:
+        supported_operators = ", ".join(operators)
+        raise ValueError(
+            f"Condition {index + 1}: unsupported operator '{operator}' for type '{value_type}'. "
+            f"Supported operators: {supported_operators}"
+        )
+
+    validated_operator = cast(FilterOperator, operator)
+    validated_type = cast(FilterValueType, value_type)
+
+    if operator in _VALUELESS_FILTER_OPERATORS:
+        if "value" in condition:
+            raise ValueError(f"Condition {index + 1}: operator '{operator}' does not accept a value")
+        return {"field": field.strip(), "operator": validated_operator, "type": validated_type}
+
+    if not _has_filter_value(condition.get("value")):
+        raise ValueError(f"Condition {index + 1}: operator '{operator}' requires a value")
+    _validate_filter_value_type(value_type, operator, condition["value"], index)
+
+    return {
+        "field": field.strip(),
+        "operator": validated_operator,
+        "value": condition["value"],
+        "type": validated_type,
+    }
+
+
+def _validate_filter_conditions(conditions: List[FilterCondition]) -> List[FilterCondition]:
+    if not isinstance(conditions, list):
+        raise ValueError("conditions must be a list")
+    if not conditions or len(conditions) > _MAX_FILTER_CONDITIONS:
+        raise ValueError(f"conditions must contain 1-{_MAX_FILTER_CONDITIONS} items")
+    return [_validate_filter_condition(condition, index) for index, condition in enumerate(conditions)]
+
+
 def _build_filter_search_body(
     *,
     conditions: List[FilterCondition],
     page_size: int,
     cursor: Optional[str] = None,
-    start_after: Optional[str] = None,
     run_ids: Optional[List[str]] = None,
     index_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
+    validated_conditions = _validate_filter_conditions(conditions)
     body: Dict[str, Any] = {
-        "conditions": conditions,
+        "conditions": validated_conditions,
         "page_size": page_size,
     }
-    normalized_cursor = cursor or start_after
-    if normalized_cursor:
-        body["cursor"] = normalized_cursor
+    if cursor:
+        body["cursor"] = cursor
     if run_ids:
         body["run_ids"] = run_ids
     if index_ids:
@@ -83,7 +233,7 @@ class SearchResource:
         results = client.search.filter(
             index_id="idx_123",
             conditions=[
-                {"field": "category", "operator": "eq", "value": "sports", "type": "string"}
+                {"field": "category", "operator": "equals", "value": "sports", "type": "string"}
             ]
         )
     """
@@ -231,7 +381,6 @@ class SearchResource:
         conditions: List[FilterCondition],
         page_size: int = 50,
         cursor: Optional[str] = None,
-        start_after: Optional[str] = None,
         run_ids: Optional[List[str]] = None,
         index_ids: Optional[List[str]] = None,
     ) -> FilterSearchResponse:
@@ -240,12 +389,11 @@ class SearchResource:
 
         Args:
             index_id: Index ID to search
-            conditions: Filter conditions (1-5 conditions)
-                Each condition: {field, operator, value, type, fuzzyMatch?}
-                Operators may use the backend canonical filter operators or legacy aliases.
+            conditions: Filter conditions (1-4 conditions)
+                Each condition must use canonical field, operator, and type keys.
+                Value-bearing operators require value; is_empty and is_not_empty reject value.
             page_size: Number of results per page (1-100)
             cursor: Pagination cursor
-            start_after: Legacy pagination cursor alias
             run_ids: Filter to specific prompt runs
             index_ids: Additional indexes to search
 
@@ -259,7 +407,6 @@ class SearchResource:
             conditions=conditions,
             page_size=page_size,
             cursor=cursor,
-            start_after=start_after,
             run_ids=run_ids,
             index_ids=index_ids,
         )
@@ -272,7 +419,6 @@ class SearchResource:
         conditions: List[FilterCondition],
         page_size: int = 50,
         cursor: Optional[str] = None,
-        start_after: Optional[str] = None,
         run_ids: Optional[List[str]] = None,
         index_ids: Optional[List[str]] = None,
     ) -> FilterSearchResponse:
@@ -280,10 +426,10 @@ class SearchResource:
         Perform filter-based search in the user's playground.
 
         Args:
-            conditions: Filter conditions (1-5 conditions)
+            conditions: Filter conditions (1-4 conditions)
+                Value-bearing operators require value; is_empty and is_not_empty reject value.
             page_size: Number of results per page (1-100)
             cursor: Pagination cursor
-            start_after: Legacy pagination cursor alias
             run_ids: Filter to specific prompt runs
             index_ids: Optional explicit index IDs
 
@@ -294,7 +440,6 @@ class SearchResource:
             conditions=conditions,
             page_size=page_size,
             cursor=cursor,
-            start_after=start_after,
             run_ids=run_ids,
             index_ids=index_ids,
         )
@@ -474,7 +619,6 @@ class AsyncSearchResource:
         conditions: List[FilterCondition],
         page_size: int = 50,
         cursor: Optional[str] = None,
-        start_after: Optional[str] = None,
         run_ids: Optional[List[str]] = None,
         index_ids: Optional[List[str]] = None,
     ) -> FilterSearchResponse:
@@ -483,7 +627,6 @@ class AsyncSearchResource:
             conditions=conditions,
             page_size=page_size,
             cursor=cursor,
-            start_after=start_after,
             run_ids=run_ids,
             index_ids=index_ids,
         )
@@ -496,7 +639,6 @@ class AsyncSearchResource:
         conditions: List[FilterCondition],
         page_size: int = 50,
         cursor: Optional[str] = None,
-        start_after: Optional[str] = None,
         run_ids: Optional[List[str]] = None,
         index_ids: Optional[List[str]] = None,
     ) -> FilterSearchResponse:
@@ -505,7 +647,6 @@ class AsyncSearchResource:
             conditions=conditions,
             page_size=page_size,
             cursor=cursor,
-            start_after=start_after,
             run_ids=run_ids,
             index_ids=index_ids,
         )

@@ -12,7 +12,7 @@ from typing import Literal, Optional, cast
 
 AuthMode = Literal["api_key", "bearer"]
 
-DEFAULT_BASE_URL = "https://playground-api-stg-udk7d32fva-uc.a.run.app/api/v2"
+DEFAULT_BASE_URL = "https://api.vectormethods.com/api/v2"
 DEFAULT_TIMEOUT = 60.0
 DEFAULT_MAX_RETRIES = 3
 

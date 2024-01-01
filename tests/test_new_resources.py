@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import io
-from typing import Any, Optional
+from typing import Any, Optional, get_args, get_type_hints
 
 import pytest
 
+from videovector._types import FilterCondition
 from videovector.resources.connectors import AsyncConnectorsResource, ConnectorsResource
 from videovector.resources.exports import AsyncExportsResource, ExportsResource
 from videovector.resources.import_jobs import AsyncImportJobsResource, ImportJobsResource
@@ -17,6 +19,39 @@ from videovector.resources.search import AsyncSearchResource, SearchResource
 from videovector.resources.usage import AsyncUsageResource, UsageResource
 from videovector.resources.videos import AsyncVideosResource, VideosResource
 from videovector.resources.webhooks import AsyncWebhooksResource, WebhooksResource
+
+
+def test_filter_search_public_surface_is_canonical_only() -> None:
+    for method in (
+        SearchResource.filter,
+        SearchResource.filter_playground,
+        AsyncSearchResource.filter,
+        AsyncSearchResource.filter_playground,
+    ):
+        assert "cursor" in inspect.signature(method).parameters
+        assert "start_after" not in inspect.signature(method).parameters
+
+    annotations = get_type_hints(FilterCondition)
+    assert "fuzzyMatch" not in annotations
+    assert set(get_args(annotations["type"])) == {"string", "integer", "number", "boolean", "array"}
+    assert set(get_args(annotations["operator"])) == {
+        "contains",
+        "ends_with",
+        "equals",
+        "greater_equal",
+        "greater_than",
+        "is_empty",
+        "is_not_empty",
+        "item_contains",
+        "item_equals",
+        "length_equals",
+        "length_greater",
+        "length_less",
+        "less_equal",
+        "less_than",
+        "starts_with",
+    }
+    assert not {"eq", "gt", "gte", "lt", "lte"} & set(get_args(annotations["operator"]))
 
 
 def _marker_payload(marker_id: str = "marker_1", color: str = "blue") -> dict[str, Any]:
@@ -1080,7 +1115,7 @@ def test_search_filter_playground_sync() -> None:
     resource = SearchResource(http)  # type: ignore[arg-type]
 
     result = resource.filter_playground(
-        conditions=[{"field": "label", "operator": "eq", "value": "car", "type": "string"}],
+        conditions=[{"field": "label", "operator": "equals", "value": "car", "type": "string"}],
         page_size=10,
     )
     assert result.total_shown == 1
@@ -1101,9 +1136,9 @@ def test_search_filter_sync_uses_canonical_cursor_body_and_parses_paginated_shap
 
     result = resource.filter(
         "idx_1",
-        conditions=[{"field": "label", "operator": "eq", "value": "car", "type": "string"}],
+        conditions=[{"field": "label", "operator": "equals", "value": "car", "type": "string"}],
         page_size=10,
-        start_after="cursor_1",
+        cursor="cursor_1",
         run_ids=["run_1"],
     )
 
@@ -1111,11 +1146,73 @@ def test_search_filter_sync_uses_canonical_cursor_body_and_parses_paginated_shap
     assert result.next_page_token == "cursor_2"
     assert result.data[0].marker.marker_id == "marker_search_1"
     assert http.calls[0]["json"] == {
-        "conditions": [{"field": "label", "operator": "eq", "value": "car", "type": "string"}],
+        "conditions": [{"field": "label", "operator": "equals", "value": "car", "type": "string"}],
         "page_size": 10,
         "cursor": "cursor_1",
         "run_ids": ["run_1"],
     }
+
+
+def test_search_filter_rejects_noncanonical_conditions_before_request() -> None:
+    http = _FakeSyncHttp({("POST", "/search/filter/idx_1"): {}})
+    resource = SearchResource(http)  # type: ignore[arg-type]
+
+    invalid_condition_sets = [
+        [{"field": "label", "operator": "gte", "value": "car", "type": "string"}],
+        [{"field": "label", "operator": "contains", "type": "string"}],
+        [{"field": "label", "operator": "is_empty", "value": None, "type": "string"}],
+        [{"field": "label", "operator": "greater_equal", "value": "car", "type": "string"}],
+        [{"field": "label", "operator": "contains", "value": "car", "type": "unknown"}],
+        [{"field": "score", "operator": "greater_equal", "value": "0.8", "type": "number"}],
+        [{"field": "enabled", "operator": "equals", "value": "false", "type": "boolean"}],
+        [{"field": "count", "operator": "greater_than", "value": 1.2, "type": "integer"}],
+        [{"field": "tags", "operator": "item_contains", "value": 3, "type": "array"}],
+        [{"field": "tags", "operator": "length_greater", "value": -1, "type": "array"}],
+        [
+            {
+                "field": "label",
+                "operator": "contains",
+                "value": "car",
+                "type": "string",
+                "fuzzyMatch": True,
+            }
+        ],
+        [
+            {"field": "one", "operator": "equals", "value": "1", "type": "string"},
+            {"field": "two", "operator": "equals", "value": "2", "type": "string"},
+            {"field": "three", "operator": "equals", "value": "3", "type": "string"},
+            {"field": "four", "operator": "equals", "value": "4", "type": "string"},
+            {"field": "five", "operator": "equals", "value": "5", "type": "string"},
+        ],
+    ]
+
+    for conditions in invalid_condition_sets:
+        with pytest.raises(ValueError):
+            resource.filter("idx_1", conditions=conditions)  # type: ignore[arg-type]
+
+    assert http.calls == []
+
+
+def test_search_filter_accepts_valueless_condition_without_value() -> None:
+    http = _FakeSyncHttp(
+        {
+            ("POST", "/search/filter/idx_1"): {
+                "data": [_search_result_payload()],
+                "pagination": {"limit": 10, "has_more": False, "next_cursor": None},
+            }
+        }
+    )
+    resource = SearchResource(http)  # type: ignore[arg-type]
+
+    resource.filter(
+        "idx_1",
+        conditions=[{"field": "label", "operator": "is_empty", "type": "string"}],
+        page_size=10,
+    )
+
+    assert http.calls[0]["json"]["conditions"] == [
+        {"field": "label", "operator": "is_empty", "type": "string"}
+    ]
 
 
 def test_search_filter_playground_async() -> None:
@@ -1132,7 +1229,7 @@ def test_search_filter_playground_async() -> None:
 
     async def _run() -> None:
         result = await resource.filter_playground(
-            conditions=[{"field": "label", "operator": "eq", "value": "car", "type": "string"}],
+            conditions=[{"field": "label", "operator": "equals", "value": "car", "type": "string"}],
         )
         assert result.total_shown == 1
         assert result.results[0].marker.color == "green"
