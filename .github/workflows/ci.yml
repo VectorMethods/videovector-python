@@ -11,13 +11,21 @@ permissions:
 
 jobs:
   quality:
-    name: Python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+    name: Python ${{ matrix.python-minor }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12"]
+        include:
+          - python-minor: "3.9"
+            python-version: "3.9.23"
+          - python-minor: "3.10"
+            python-version: "3.10.18"
+          - python-minor: "3.11"
+            python-version: "3.11.13"
+          - python-minor: "3.12"
+            python-version: "3.12.11"
 
     steps:
       - name: Checkout
@@ -51,7 +59,9 @@ jobs:
         run: black --check videovector tests examples scripts
 
       - name: MyPy
-        run: mypy videovector scripts/release_artifacts.py
+        run: >-
+          mypy videovector scripts/release_artifacts.py scripts/release_process.py
+          scripts/release_draft_staging.py scripts/smoke_release_install.py
 
       - name: Pytest
         run: pytest -q tests
@@ -64,7 +74,7 @@ jobs:
 
   secrets:
     name: Secret scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
