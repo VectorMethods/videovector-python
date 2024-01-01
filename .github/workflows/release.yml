@@ -3,27 +3,144 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: "Package version to publish, matching pyproject.toml and videovector/_version.py"
+      release_tag:
+        description: "Bot-created release tag, for example videovector-v1.0.0"
         required: true
         type: string
+      release_body_sha256:
+        description: "SHA-256 of the scanned release body held by vectormethods-public-bot"
+        required: true
+        type: string
+
+run-name: Release ${{ inputs.release_tag }}
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-videovector-${{ inputs.version }}
+  group: release-${{ inputs.release_tag }}
   cancel-in-progress: false
 
 jobs:
+  guard:
+    name: Validate bot release request
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.validate.outputs.version }}
+      pypi_exists: ${{ steps.registry.outputs.pypi_exists }}
+      testpypi_exists: ${{ steps.registry.outputs.testpypi_exists }}
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_tag }}
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Validate actor, tag, target, and metadata
+        id: validate
+        env:
+          RELEASE_BODY_SHA256: ${{ inputs.release_body_sha256 }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_ACTOR" != "vectormethods-public-bot[bot]" && "$GITHUB_ACTOR" != "vectormethods-public-bot" ]]; then
+            echo "Release workflow may only be dispatched by vectormethods-public-bot." >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TAG" =~ ^videovector-v([0-9]+\.[0-9]+\.[0-9]+([a-z0-9.-]+)?)$ ]]; then
+            echo "Release tag must match videovector-vX.Y.Z." >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_BODY_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "release_body_sha256 must be a lowercase SHA-256 digest." >&2
+            exit 1
+          fi
+          version="${BASH_REMATCH[1]}"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          tag_sha="$(git rev-list -n 1 "$RELEASE_TAG")"
+          main_sha="$(git rev-parse refs/remotes/origin/main)"
+          if [[ "$tag_sha" != "$main_sha" ]]; then
+            echo "Release tag must point at public main." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          RELEASE_VERSION="$version" python - <<'PY'
+          import os
+          import re
+          import sys
+          import tomllib
+          from pathlib import Path
+
+          version = os.environ["RELEASE_VERSION"]
+          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[a-z0-9.-]+)?", version):
+              raise SystemExit("invalid release version")
+          pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          package_version = pyproject["project"]["version"]
+          version_file = Path("videovector/_version.py").read_text(encoding="utf-8")
+          expected_line = f'__version__ = "{version}"'
+          if package_version != version or expected_line not in version_file:
+              print(
+                  "Release version must match pyproject.toml and videovector/_version.py",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+          PY
+
+      - name: Check registry version state
+        id: registry
+        env:
+          RELEASE_VERSION: ${{ steps.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import urllib.error
+          import urllib.request
+
+          version = os.environ["RELEASE_VERSION"]
+          output_path = os.environ["GITHUB_OUTPUT"]
+          checks = {
+              "pypi_exists": f"https://pypi.org/pypi/videovector/{version}/json",
+              "testpypi_exists": f"https://test.pypi.org/pypi/videovector/{version}/json",
+          }
+          results = {}
+          for key, url in checks.items():
+              request = urllib.request.Request(
+                  url,
+                  headers={"User-Agent": "vectormethods-videovector-release"},
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=30):
+                      results[key] = "true"
+              except urllib.error.HTTPError as exc:
+                  if exc.code == 404:
+                      results[key] = "false"
+                  else:
+                      raise
+          with open(output_path, "a", encoding="utf-8") as handle:
+              for key, value in results.items():
+                  handle.write(f"{key}={value}\n")
+          PY
+
   build:
-    name: Build SDK artifacts
+    name: Build and check SDK artifacts
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
-      - name: Checkout
+      - name: Checkout release tag
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_tag }}
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -37,41 +154,28 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
-      - name: Verify release version
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import os
-          import re
-          import sys
-          import tomllib
-          from pathlib import Path
-
-          version = os.environ["RELEASE_VERSION"]
-          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[a-z0-9.-]+)?", version):
-              raise SystemExit(f"Invalid release version: {version}")
-
-          pyproject = tomllib.loads(Path("pyproject.toml").read_text())
-          package_version = pyproject["project"]["version"]
-          version_file = Path("videovector/_version.py").read_text()
-          expected_line = f'__version__ = "{version}"'
-          if package_version != version or expected_line not in version_file:
-              print(
-                  "Release version must match pyproject.toml and videovector/_version.py",
-                  file=sys.stderr,
-              )
-              raise SystemExit(1)
-          PY
-
       - name: Run release checks
         run: |
+          set -euo pipefail
           ruff check videovector tests examples
           mypy videovector
           pytest -q tests
           python -m build
           python -m twine check dist/*
+
+      - name: Local wheel install smoke
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/videovector-wheel-smoke
+          /tmp/videovector-wheel-smoke/bin/python -m pip install --upgrade pip
+          /tmp/videovector-wheel-smoke/bin/python -m pip install dist/*.whl
+          /tmp/videovector-wheel-smoke/bin/python - <<'PY'
+          from videovector import AsyncVideoVector, VideoVector, __version__
+
+          assert VideoVector.__name__ == "VideoVector"
+          assert AsyncVideoVector.__name__ == "AsyncVideoVector"
+          assert __version__
+          PY
 
       - name: Upload dist artifact
         uses: actions/upload-artifact@v7
@@ -83,7 +187,10 @@ jobs:
 
   publish-testpypi:
     name: Publish to TestPyPI
-    needs: build
+    needs:
+      - guard
+      - build
+    if: ${{ needs.guard.outputs.testpypi_exists != 'true' }}
     runs-on: ubuntu-latest
     environment: testpypi
     permissions:
@@ -105,7 +212,10 @@ jobs:
 
   smoke-test-testpypi:
     name: Smoke test TestPyPI package
-    needs: publish-testpypi
+    needs:
+      - guard
+      - publish-testpypi
+    if: ${{ always() && needs.guard.result == 'success' && (needs.publish-testpypi.result == 'success' || needs.publish-testpypi.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -117,16 +227,27 @@ jobs:
 
       - name: Install from TestPyPI and verify import
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ needs.guard.outputs.version }}
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple "videovector==${RELEASE_VERSION}"
-          python -c "from videovector import AsyncVideoVector, VideoVector; print(VideoVector.__name__, AsyncVideoVector.__name__)"
+          for attempt in $(seq 1 18); do
+            rm -rf /tmp/videovector-testpypi-smoke
+            python -m venv /tmp/videovector-testpypi-smoke
+            /tmp/videovector-testpypi-smoke/bin/python -m pip install --upgrade pip
+            if /tmp/videovector-testpypi-smoke/bin/python -m pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple "videovector==${RELEASE_VERSION}"; then
+              /tmp/videovector-testpypi-smoke/bin/python -c "from videovector import AsyncVideoVector, VideoVector; print(VideoVector.__name__, AsyncVideoVector.__name__)"
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1
 
   publish-pypi:
     name: Publish to PyPI
-    needs: smoke-test-testpypi
+    needs:
+      - guard
+      - smoke-test-testpypi
+    if: ${{ needs.guard.outputs.pypi_exists != 'true' }}
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -145,26 +266,34 @@ jobs:
         with:
           packages-dir: dist/
 
-  create-github-release:
-    name: Create GitHub release
-    needs: publish-pypi
+  smoke-test-pypi:
+    name: Smoke test PyPI package
+    needs:
+      - guard
+      - publish-pypi
+    if: ${{ always() && needs.guard.result == 'success' && (needs.publish-pypi.result == 'success' || needs.publish-pypi.result == 'skipped') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
+    timeout-minutes: 15
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
 
-      - name: Create release tag and notes
+      - name: Install from PyPI and verify import
         env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ needs.guard.outputs.version }}
         run: |
           set -euo pipefail
-          tag="videovector-v${RELEASE_VERSION}"
-          gh release create "$tag" \
-            --target "$GITHUB_SHA" \
-            --title "VideoVector Python SDK ${RELEASE_VERSION}" \
-            --generate-notes
+          for attempt in $(seq 1 18); do
+            rm -rf /tmp/videovector-pypi-smoke
+            python -m venv /tmp/videovector-pypi-smoke
+            /tmp/videovector-pypi-smoke/bin/python -m pip install --upgrade pip
+            if /tmp/videovector-pypi-smoke/bin/python -m pip install --no-cache-dir "videovector==${RELEASE_VERSION}"; then
+              /tmp/videovector-pypi-smoke/bin/python -c "from videovector import AsyncVideoVector, VideoVector; print(VideoVector.__name__, AsyncVideoVector.__name__)"
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1
