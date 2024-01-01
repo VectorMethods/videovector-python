@@ -53,13 +53,15 @@ with VideoVector(api_key=os.environ["VIDEO_VECTOR_API_KEY"]) as client:
         print(result.video_id, result.start_time, result.similarity_score)
 ```
 
-Uploads return an asynchronous import job. Videos longer than 40 minutes become
-the minimum number of independent parts, each at most 40 minutes. Every part has
-its own ID, playable media, segments, and visually grounded video result. The same
-content-aware Gemini call produces segment and video-level metadata; fixed mode
-is segment-only. Audio retains the two-hour duration limit. There is no cross-part
-consolidation. `iter_outputs()` follows every manifest page; `import_job_id` processes
-the entire completed manifest without sending a bounded list of video IDs.
+Uploads return an asynchronous import job. Long videos retain one original media
+identity and use internal analysis parts of at most 40 minutes. Segment timestamps
+refer to the original timeline. Every prompt requires both a segment schema and
+`video_level` instructions/schema. Every extraction returns both scopes together,
+including images. Audio/video boundaries are content-aware. Execution overrides
+are only `processing_model` and `enable_image_embedding`; omitted overrides inherit
+the prompt's defaults. Apply filtering through search or your own result handling.
+`iter_outputs()` follows every manifest page; `import_job_id` processes the entire
+completed manifest without sending a bounded list of video IDs.
 
 ## URL imports and direct local uploads
 

@@ -89,17 +89,6 @@ def _video_processing_status_payload() -> dict[str, Any]:
         "created_at": "2026-01-01T00:00:00Z",
         "updated_at": "2026-01-01T00:00:01Z",
         "attempt_id": "attempt_1",
-        "video_level": {
-            "status": "processing",
-            "result_available": False,
-            "successful_segment_count": 1,
-            "failed_segment_count": 0,
-            "started_at": "2026-01-01T00:00:00Z",
-            "completed_at": None,
-            "updated_at": "2026-01-01T00:00:01Z",
-            "error_message": None,
-            "attempt_id": "attempt_1",
-        },
         "segments": [
             {
                 "segment_id": "seg_1",
@@ -192,27 +181,14 @@ def _prompt_run_payload() -> dict[str, Any]:
         "total_segments": 10,
         "completed_segments": 8,
         "field_extraction_failures": 1,
-        "transcription_failures": 0,
         "image_embedding_failures": 0,
         "field_extraction_succeeded": False,
-        "transcription_succeeded": True,
         "image_embedding_succeeded": None,
         "error_message": None,
-        "video_segmentation_type": "smart",
-        "audio_segmentation_type": "content_aware",
-        "image_segmentation_type": "image",
-        "video_segment_duration": None,
-        "audio_segment_duration": None,
         "created_new_segments": False,
         "processing_model": "gemini-2.5-flash",
         "total_video_seconds": 92.5,
-        "enable_transcription": True,
         "enable_image_embedding": True,
-        "video_level_enabled": True,
-        "video_level_total_items": 3,
-        "video_level_completed_items": 2,
-        "video_level_failed_items": 0,
-        "video_level_partial_items": 1,
         "billing_estimated_mt": 2.5,
         "billing_actual_mt": 2.25,
         "billing_status": "confirmed",
@@ -314,10 +290,8 @@ def _segment_run_result_payload() -> dict[str, Any]:
         "processing_warning": None,
         "schema_used": '{"type":"object"}',
         "field_extraction_succeeded": True,
-        "transcription_succeeded": True,
         "image_embedding_succeeded": None,
         "field_extraction_error": None,
-        "transcription_error": None,
         "image_embedding_error": None,
         "metadata_markers": {
             "summary": {
@@ -341,20 +315,15 @@ def _prompt_run_video_result_payload() -> dict[str, Any]:
         "video_name": "Episode 1",
         "source_index_id": "idx_1",
         "executed_at": "2026-01-01T00:00:00Z",
-        "status": "completed",
+        "status": "successful",
         "metadata": {"summary": "Full video summary"},
         "metadata_text": "Full video summary",
         "raw_llm_response": "{}",
         "processing_warning": None,
         "schema_used": '{"type":"object"}',
-        "successful_segment_count": 8,
-        "failed_segment_count": 2,
         "source_fingerprint": "source-and-prompt-fingerprint",
         "embedding_status": "searchable",
         "attempt_id": "attempt_1",
-        "error_message": None,
-        "started_at": "2026-01-01T00:00:00Z",
-        "completed_at": "2026-01-01T00:00:02Z",
         "segment_uri": "https://api.example.com/media/segment?token=segment",
         "gcs_uri": "gs://bucket/segments/seg_1.mp4",
         "thumbnail_uri": "https://api.example.com/media/thumbnail?token=thumbnail",
@@ -380,7 +349,6 @@ def _failed_segments_manifest_payload() -> dict[str, Any]:
         "failed_segments": 2,
         "operation_counts": {
             "field_extraction": 1,
-            "transcription": 1,
             "image_embedding": 0,
             "processing": 0,
         },
@@ -390,7 +358,6 @@ def _failed_segments_manifest_payload() -> dict[str, Any]:
                 "failed_segments": 2,
                 "operation_counts": {
                     "field_extraction": 1,
-                    "transcription": 1,
                     "image_embedding": 0,
                     "processing": 0,
                 },
@@ -399,7 +366,6 @@ def _failed_segments_manifest_payload() -> dict[str, Any]:
                         "segment_id": "seg_2",
                         "failed_operations": ["field_extraction"],
                         "field_extraction_error": "schema mismatch",
-                        "transcription_error": None,
                         "image_embedding_error": None,
                         "failure_stage": "field_extraction",
                         "failure_message": "schema mismatch",
@@ -443,7 +409,6 @@ def _segment_retry_status_payload() -> dict[str, Any]:
             "started_at": "2026-01-01T00:00:01Z",
             "completed_at": "2026-01-01T00:00:04Z",
             "field_extraction_succeeded": True,
-            "transcription_succeeded": True,
             "image_embedding_succeeded": None,
             "billing_status": "confirmed",
             "billing_actual_mt": 1.25,
@@ -797,7 +762,7 @@ def test_prompts_resource_sync() -> None:
             "properties": {"headline": {"type": "string"}},
             "required": ["headline"],
         },
-        clear_video_level=True,
+        video_level=_video_level_payload(),
         idempotency_key="prompt-update-1",
     )
     assert updated.name == "Prompt Updated"
@@ -810,7 +775,7 @@ def test_prompts_resource_sync() -> None:
             "properties": {"headline": {"type": "string"}},
             "required": ["headline"],
         },
-        "clear_video_level": True,
+        "video_level": _video_level_payload(),
     }
     assert http.calls[3]["idempotency_key"] == "prompt-update-1"
 
@@ -955,22 +920,19 @@ def test_prompt_runs_resource_sync() -> None:
     estimate = resource.estimate(
         prompt_id="prompt_1",
         target={"type": "index", "index_id": "idx_1"},
-        video_segmentation_type="fixed",
-        video_segment_duration=15,
+        processing_model="model-1",
+        enable_image_embedding=False,
     )
     assert estimate.estimated_mt == 12.5
     assert http.calls[1]["json"] == {
         "prompt_id": "prompt_1",
         "target": {"type": "index", "index_id": "idx_1"},
-        "video_segmentation_type": "fixed",
-        "audio_segmentation_type": "content_aware",
-        "video_segment_duration": 15,
-        "enable_transcription": True,
-        "enable_image_embedding": True,
+        "processing_model": "model-1",
+        "enable_image_embedding": False,
     }
 
     retrieved = resource.retrieve("run_1")
-    assert retrieved.video_level_enabled is True
+    assert retrieved.run_id == "run_1"
 
     results = resource.list_results("run_1", video_id="video_1", limit=25)
     assert results.data[0].metadata_markers["summary"].marker_id == "marker_field_1"
@@ -992,6 +954,11 @@ def test_prompt_runs_resource_sync() -> None:
 
     failed_segments = resource.get_failed_segments("run_1")
     assert failed_segments.videos[0].segments[0].retryable is True
+    assert failed_segments.operation_counts.model_dump() == {
+        "field_extraction": 1,
+        "image_embedding": 0,
+        "processing": 0,
+    }
 
     cancelled = resource.cancel("run_1", idempotency_key="run-cancel-1")
     assert cancelled.status == "cancelled"
@@ -1110,14 +1077,11 @@ def test_prompt_runs_resource_async_requires_video_id_for_list_results() -> None
         resource.list_results("run_1")
 
 
-def test_prompt_runs_resource_sync_validates_fixed_segmentation_requests() -> None:
+def test_prompt_runs_resource_sync_rejects_removed_segmentation() -> None:
     http = _FakeSyncHttp({})
     resource = PromptRunsResource(http)  # type: ignore[arg-type]
 
-    with pytest.raises(
-        ValueError,
-        match="video_segment_duration is required when video_segmentation_type is 'fixed'",
-    ):
+    with pytest.raises(TypeError):
         resource.execute(
             prompt_id="prompt_1",
             target={"type": "index", "index_id": "idx_1"},
@@ -1127,15 +1091,12 @@ def test_prompt_runs_resource_sync_validates_fixed_segmentation_requests() -> No
     assert http.calls == []
 
 
-def test_prompt_runs_resource_async_validates_segmentation_options() -> None:
+def test_prompt_runs_resource_async_rejects_removed_segmentation() -> None:
     http = _FakeAsyncHttp({})
     resource = AsyncPromptRunsResource(http)  # type: ignore[arg-type]
 
     async def _run() -> None:
-        with pytest.raises(
-            ValueError,
-            match="audio_segment_duration is required when audio_segmentation_type is 'fixed'",
-        ):
+        with pytest.raises(TypeError):
             await resource.estimate(
                 prompt_id="prompt_1",
                 target={"type": "index", "index_id": "idx_1"},
@@ -1186,7 +1147,6 @@ def test_videos_prompt_runs_and_playground_sync() -> None:
     assert len(page.data) == 1
     assert page.data[0].video_id == "video_1"
     assert page.data[0].marker.marker_id == "marker_1"
-    assert page.data[0].processing_status[0].video_level.attempt_id == "attempt_1"
 
 
 def test_videos_create_sync_returns_import_job_with_optional_source_connector() -> None:

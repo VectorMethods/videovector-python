@@ -24,6 +24,14 @@ SCENE_TAXONOMY_SCHEMA = {
 def main() -> None:
     with api_client() as client:
         prompt = client.prompts.create(
+            video_level={
+                "instructions_text": "Summarize the main observations across the whole media.",
+                "json_schema": {
+                    "type": "object",
+                    "properties": {"summary": {"type": "string"}},
+                    "required": ["summary"],
+                },
+            },
             name="Scene Taxonomy Classifier",
             description="Classifies video segments into reusable content operations categories.",
             prompt_text=(

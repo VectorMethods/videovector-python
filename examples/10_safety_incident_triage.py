@@ -10,6 +10,14 @@ def main() -> None:
 
     with api_client() as client:
         prompt = client.prompts.create(
+            video_level={
+                "instructions_text": "Summarize the main observations across the whole media.",
+                "json_schema": {
+                    "type": "object",
+                    "properties": {"summary": {"type": "string"}},
+                    "required": ["summary"],
+                },
+            },
             name="Safety Incident Triage",
             description="Flags visible safety hazards without making unsupported claims.",
             prompt_text=(
@@ -33,7 +41,6 @@ def main() -> None:
         estimate = client.prompt_runs.estimate(
             prompt_id=prompt.prompt_id,
             target={"type": "index", "index_id": index_id},
-            video_segmentation_type="smart",
         )
         print("estimated metered units", estimate.estimated_mt)
 

@@ -200,15 +200,13 @@ class VideosResource:
         self,
         video_id: str,
         *,
-        segment_duration: int = 10,
         prompt_id: Optional[str] = None,
     ) -> ProcessingStartedResponse:
         """
-        Start processing a video with segmentation.
+        Extract segment and whole-media information together.
 
         Args:
             video_id: Video ID to process
-            segment_duration: Segment duration in seconds (1-300)
             prompt_id: Optional prompt ID for extraction
 
         Returns:
@@ -218,7 +216,7 @@ class VideosResource:
             NotFoundError: If video doesn't exist
             ValidationError: If video is already processing
         """
-        params: dict[str, Any] = {"segment_duration": segment_duration}
+        params: dict[str, Any] = {}
         if prompt_id:
             params["prompt_id"] = prompt_id
         response = self._client.post(
@@ -477,11 +475,10 @@ class AsyncVideosResource:
         self,
         video_id: str,
         *,
-        segment_duration: int = 10,
         prompt_id: Optional[str] = None,
     ) -> ProcessingStartedResponse:
-        """Start processing a video with segmentation."""
-        params: dict[str, Any] = {"segment_duration": segment_duration}
+        """Extract segment and whole-media information together."""
+        params: dict[str, Any] = {}
         if prompt_id:
             params["prompt_id"] = prompt_id
         response = await self._client.post(

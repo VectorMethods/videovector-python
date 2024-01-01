@@ -1,3 +1,9 @@
+# 3.0.0
+
+- Require whole-media schemas alongside segment schemas for every prompt, including images.
+- Remove fixed segmentation and separate whole-media processing status.
+- Align sync and async processing overrides with model selection and image indexing only.
+
 # Changelog
 
 ## 2.1.1

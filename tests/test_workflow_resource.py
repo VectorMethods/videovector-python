@@ -17,6 +17,14 @@ def _prompt_payload() -> dict[str, Any]:
         "description": "Find products",
         "prompt_text": "Extract products",
         "json_schema": {"type": "object", "properties": {}},
+        "video_level": {
+            "instructions_text": "Summarize the whole media",
+            "json_schema": {
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "required": ["summary"],
+            },
+        },
         "semantic_indexing": {
             "disabled_segment_fields": [],
             "disabled_video_level_fields": [],
@@ -104,6 +112,14 @@ class CaptureSyncHttp:
                     "description": "Find products",
                     "prompt_text": "Extract products",
                     "json_schema": {"type": "object", "properties": {}},
+                    "video_level": {
+                        "instructions_text": "Summarize the whole media",
+                        "json_schema": {
+                            "type": "object",
+                            "properties": {"summary": {"type": "string"}},
+                            "required": ["summary"],
+                        },
+                    },
                     "semantic_indexing": {
                         "disabled_segment_fields": [],
                         "disabled_video_level_fields": [],
@@ -150,18 +166,17 @@ def test_process_inherits_prompt_defaults_and_inline_prompt() -> None:
     assert request["idempotency_key"].startswith("workflow-process:")
 
 
-def test_fixed_processing_defaults_duration_on_backend_and_validates_other_modes() -> None:
+def test_processing_preserves_only_supported_overrides() -> None:
     http = CaptureSyncHttp()
     resource = WorkflowResource(http)  # type: ignore[arg-type]
-    resource.process(prompt_id="prompt_1", segmentation_mode="fixed")
-    assert "fixed_segment_duration_seconds" not in http.posts[-1]["json"]
-
-    with pytest.raises(ValueError, match="accepted only"):
-        resource.process(
-            prompt_id="prompt_1",
-            segmentation_mode="content_aware",
-            fixed_segment_duration_seconds=10,
-        )
+    resource.process(prompt_id="prompt_1", processing_model="model-1", enable_image_embedding=False)
+    assert http.posts[-1]["json"] == {
+        "prompt_id": "prompt_1",
+        "processing_model": "model-1",
+        "enable_image_embedding": False,
+    }
+    with pytest.raises(TypeError):
+        resource.process(prompt_id="prompt_1", segmentation_mode="fixed")
 
 
 def test_search_uses_post_then_get_cursor_pages() -> None:

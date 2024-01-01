@@ -36,7 +36,6 @@ if TYPE_CHECKING:
     from .._http import AsyncHttpClient, SyncHttpClient
 
 
-SegmentationMode = Literal["content_aware", "fixed"]
 ResultLevel = Literal["segment", "video"]
 MediaInput = Union[str, Path, BinaryIO]
 
@@ -53,23 +52,9 @@ def _validate_process_options(
     *,
     prompt_id: Optional[str],
     prompt_instruction: Optional[str],
-    segmentation_mode: Optional[SegmentationMode],
-    fixed_segment_duration_seconds: Optional[int],
 ) -> None:
     if bool((prompt_id or "").strip()) == bool((prompt_instruction or "").strip()):
         raise ValueError("Exactly one of prompt_id or prompt_instruction is required")
-    if segmentation_mode not in {None, "content_aware", "fixed"}:
-        raise ValueError("segmentation_mode must be content_aware or fixed")
-    if fixed_segment_duration_seconds is not None and (
-        isinstance(fixed_segment_duration_seconds, bool)
-        or not isinstance(fixed_segment_duration_seconds, int)
-        or not 1 <= fixed_segment_duration_seconds <= 300
-    ):
-        raise ValueError("fixed_segment_duration_seconds must be between 1 and 300")
-    if segmentation_mode != "fixed" and fixed_segment_duration_seconds is not None:
-        raise ValueError(
-            "fixed_segment_duration_seconds is accepted only when segmentation_mode='fixed'"
-        )
 
 
 def _process_body(
@@ -80,16 +65,12 @@ def _process_body(
     video_ids: Optional[Union[str, List[str]]],
     index_id: Optional[str],
     index_name: Optional[str],
-    segmentation_mode: Optional[SegmentationMode],
-    fixed_segment_duration_seconds: Optional[int],
-    advanced_transcription: Optional[bool],
-    create_image_embeddings: Optional[bool],
+    processing_model: Optional[str],
+    enable_image_embedding: Optional[bool],
 ) -> Dict[str, Any]:
     _validate_process_options(
         prompt_id=prompt_id,
         prompt_instruction=prompt_instruction,
-        segmentation_mode=segmentation_mode,
-        fixed_segment_duration_seconds=fixed_segment_duration_seconds,
     )
     if import_job_id is not None and any(
         value is not None for value in (video_ids, index_id, index_name)
@@ -97,16 +78,14 @@ def _process_body(
         raise ValueError("import_job_id cannot be combined with another processing target")
     body: Dict[str, Any] = {}
     for key, value in {
-        "segmentation_mode": segmentation_mode,
-        "advanced_transcription": advanced_transcription,
-        "create_image_embeddings": create_image_embeddings,
+        "processing_model": processing_model,
+        "enable_image_embedding": enable_image_embedding,
         "import_job_id": import_job_id,
         "prompt_id": prompt_id,
         "prompt_instruction": prompt_instruction,
         "video_ids": video_ids,
         "index_id": index_id,
         "index_name": index_name,
-        "fixed_segment_duration_seconds": fixed_segment_duration_seconds,
     }.items():
         if value is not None:
             body[key] = value
@@ -503,10 +482,8 @@ class WorkflowResource:
         video_ids: Optional[Union[str, List[str]]] = None,
         index_id: Optional[str] = None,
         index_name: Optional[str] = None,
-        segmentation_mode: Optional[SegmentationMode] = None,
-        fixed_segment_duration_seconds: Optional[int] = None,
-        advanced_transcription: Optional[bool] = None,
-        create_image_embeddings: Optional[bool] = None,
+        processing_model: Optional[str] = None,
+        enable_image_embedding: Optional[bool] = None,
         idempotency_key: Optional[str] = None,
     ) -> WorkflowProcessResponse:
         response = self._client.post(
@@ -519,10 +496,8 @@ class WorkflowResource:
                 video_ids=video_ids,
                 index_id=index_id,
                 index_name=index_name,
-                segmentation_mode=segmentation_mode,
-                fixed_segment_duration_seconds=fixed_segment_duration_seconds,
-                advanced_transcription=advanced_transcription,
-                create_image_embeddings=create_image_embeddings,
+                processing_model=processing_model,
+                enable_image_embedding=enable_image_embedding,
             ),
             idempotency_key=_idempotency_key("process", idempotency_key),
         )
@@ -762,10 +737,8 @@ class AsyncWorkflowResource:
         video_ids: Optional[Union[str, List[str]]] = None,
         index_id: Optional[str] = None,
         index_name: Optional[str] = None,
-        segmentation_mode: Optional[SegmentationMode] = None,
-        fixed_segment_duration_seconds: Optional[int] = None,
-        advanced_transcription: Optional[bool] = None,
-        create_image_embeddings: Optional[bool] = None,
+        processing_model: Optional[str] = None,
+        enable_image_embedding: Optional[bool] = None,
         idempotency_key: Optional[str] = None,
     ) -> WorkflowProcessResponse:
         response = await self._client.post(
@@ -778,10 +751,8 @@ class AsyncWorkflowResource:
                 video_ids=video_ids,
                 index_id=index_id,
                 index_name=index_name,
-                segmentation_mode=segmentation_mode,
-                fixed_segment_duration_seconds=fixed_segment_duration_seconds,
-                advanced_transcription=advanced_transcription,
-                create_image_embeddings=create_image_embeddings,
+                processing_model=processing_model,
+                enable_image_embedding=enable_image_embedding,
             ),
             idempotency_key=_idempotency_key("process", idempotency_key),
         )
