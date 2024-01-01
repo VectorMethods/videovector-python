@@ -54,7 +54,10 @@ jobs:
             echo "Release workflow may only be dispatched by vectormethods-public-bot." >&2
             exit 1
           fi
-          if [[ ! "$RELEASE_TAG" =~ ^videovector-v([0-9]+\.[0-9]+\.[0-9]+([a-z0-9.-]+)?)$ ]]; then
+          release_version_pattern='^videovector-v([0-9]+\.[0-9]+\.[0-9]+([a-z0-9.-]+)?)$'
+          if [[ "$RELEASE_TAG" =~ $release_version_pattern ]]; then
+            version="${BASH_REMATCH[1]}"
+          else
             echo "Release tag must match videovector-vX.Y.Z." >&2
             exit 1
           fi
@@ -62,7 +65,6 @@ jobs:
             echo "release_body_sha256 must be a lowercase SHA-256 digest." >&2
             exit 1
           fi
-          version="${BASH_REMATCH[1]}"
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           tag_sha="$(git rev-list -n 1 "$RELEASE_TAG")"
           main_sha="$(git rev-parse refs/remotes/origin/main)"
