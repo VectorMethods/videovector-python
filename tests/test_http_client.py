@@ -102,6 +102,7 @@ def test_sync_binary_stream_is_authenticated_bounded_and_not_json_decoded() -> N
         nonlocal calls
         calls += 1
         captured["authorization"] = request.headers.get("x-api-key", "")
+        captured["accept_encoding"] = request.headers.get("accept-encoding", "")
         captured["path"] = request.url.path
         return httpx.Response(
             200,
@@ -126,6 +127,7 @@ def test_sync_binary_stream_is_authenticated_bounded_and_not_json_decoded() -> N
         payload = b"".join(
             client.iter_bytes(
                 "/exports/export_1/download",
+                headers={"accept-encoding": "gzip"},
                 chunk_size=4,
                 max_bytes=32,
             )
@@ -137,6 +139,7 @@ def test_sync_binary_stream_is_authenticated_bounded_and_not_json_decoded() -> N
     assert calls == 1
     assert captured == {
         "authorization": "vv_test_api_key",
+        "accept_encoding": "identity",
         "path": "/api/v2/exports/export_1/download",
     }
 
@@ -580,6 +583,7 @@ def test_async_binary_stream_is_authenticated_bounded_and_not_retried() -> None:
         nonlocal calls
         calls += 1
         captured["authorization"] = request.headers.get("authorization", "")
+        captured["accept_encoding"] = request.headers.get("accept-encoding", "")
         return httpx.Response(
             200,
             headers={"Content-Type": "application/json"},
@@ -614,7 +618,10 @@ def test_async_binary_stream_is_authenticated_bounded_and_not_retried() -> None:
 
     assert asyncio.run(_run()) == b"binary-export"
     assert calls == 1
-    assert captured["authorization"] == "Bearer bearer-token"
+    assert captured == {
+        "authorization": "Bearer bearer-token",
+        "accept_encoding": "identity",
+    }
 
 
 def test_async_binary_stream_rejects_partial_success_response() -> None:

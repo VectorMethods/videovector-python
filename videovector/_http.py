@@ -180,12 +180,13 @@ class SyncHttpClient:
     ) -> Iterator[bytes]:
         """Stream a response body exactly once without JSON decoding or retries."""
         _validate_stream_limits(chunk_size=chunk_size, max_bytes=max_bytes)
+        stream_headers = _identity_encoded_download_headers(headers)
 
         try:
             with self._client.stream(
                 method="GET",
                 url=endpoint,
-                headers=headers,
+                headers=stream_headers,
             ) as response:
                 if response.status_code != 200:
                     response.read()
@@ -469,12 +470,13 @@ class AsyncHttpClient:
         """Stream a response body exactly once without JSON decoding or retries."""
         _validate_stream_limits(chunk_size=chunk_size, max_bytes=max_bytes)
         client = await self._ensure_client()
+        stream_headers = _identity_encoded_download_headers(headers)
 
         try:
             async with client.stream(
                 method="GET",
                 url=endpoint,
-                headers=headers,
+                headers=stream_headers,
             ) as response:
                 if response.status_code != 200:
                     await response.aread()
@@ -620,6 +622,17 @@ def _raise_rate_limit_response(response: httpx.Response, *, retry_after: int) ->
         status_code=429,
         retry_after=retry_after,
     )
+
+
+def _identity_encoded_download_headers(
+    headers: Optional[Dict[str, str]],
+) -> Dict[str, str]:
+    """Require an undecoded response so Content-Length remains authoritative."""
+    stream_headers = {
+        name: value for name, value in (headers or {}).items() if name.lower() != "accept-encoding"
+    }
+    stream_headers["Accept-Encoding"] = "identity"
+    return stream_headers
 
 
 def _validate_stream_limits(*, chunk_size: int, max_bytes: int) -> None:
