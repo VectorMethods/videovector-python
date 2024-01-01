@@ -222,13 +222,16 @@ Examples intentionally use placeholders and environment variables. Do not hardco
 
 ## Development
 
+Use the reviewed `uv==0.11.29` installer recorded in
+`scripts/install_reviewed_uv.sh`.
+
 ```bash
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
+uv pip install --python "$(command -v python)" --require-hashes -r requirements-dev.lock
+uv pip install --python "$(command -v python)" --no-deps --no-build-isolation -e .
 ruff check videovector tests examples
 mypy videovector
 pytest -q tests
-python -m build
+python -m build --no-isolation
 python -m twine check dist/*
 ```
 

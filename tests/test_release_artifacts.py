@@ -288,4 +288,17 @@ def test_release_jobs_checkout_the_guarded_source_sha() -> None:
     )
 
     assert workflow.count("ref: ${{ inputs.release_tag }}") == 1
-    assert workflow.count("ref: ${{ needs.guard.outputs.source_sha }}") == 3
+    assert workflow.count("ref: ${{ needs.guard.outputs.source_sha }}") == 5
+
+
+def test_release_installs_only_with_the_reviewed_uv_binary() -> None:
+    workflow = (Path(__file__).parents[1] / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert workflow.count("run: bash scripts/install_reviewed_uv.sh") == 3
+    assert "python -m pip install" not in workflow
+    assert "bin/python -m pip install" not in workflow
+    assert workflow.count("python -m venv --without-pip") == 3
+    assert "uv pip uninstall" in workflow
+    assert "python -m pip --version" in workflow

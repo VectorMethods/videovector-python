@@ -5,12 +5,12 @@ repository. Do not create or push release tags from a personal workstation,
 personal GitHub account, or a manual public workflow dispatch.
 
 1. Update `videovector/_version.py`, `pyproject.toml`, and `CHANGELOG.md`.
-2. Run local checks:
+2. Install the reviewed `uv==0.11.29` binary (CI verifies its release
+   checksum in `scripts/install_reviewed_uv.sh`), then run local checks:
 
    ```bash
-   python -m pip install --upgrade pip==25.3
-   python -m pip install --require-hashes -r requirements-dev.lock
-   python -m pip install --no-deps --no-build-isolation -e .
+   uv pip install --python "$(command -v python)" --require-hashes -r requirements-dev.lock
+   uv pip install --python "$(command -v python)" --no-deps --no-build-isolation -e .
    ruff check videovector tests examples
    mypy videovector
    pytest -q tests
