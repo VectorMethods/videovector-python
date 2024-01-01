@@ -68,10 +68,11 @@ jobs:
           mkdir -m 0700 /tmp/gitleaks
           curl --proto '=https' --tlsv1.2 --retry 3 --retry-all-errors -fsSLo /tmp/gitleaks.tar.gz \
             https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz
+          echo '9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c  /tmp/gitleaks.tar.gz' | sha256sum --check -
           tar --no-same-owner -xzf /tmp/gitleaks.tar.gz -C /tmp/gitleaks gitleaks
           test -f /tmp/gitleaks/gitleaks
           test ! -L /tmp/gitleaks/gitleaks
-          echo '9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c  /tmp/gitleaks/gitleaks' | sha256sum --check -
+          echo 'e18325d568268b6efb6cd0cc721f8bea5667f4cd1c8d03618ab61987f41269ad  /tmp/gitleaks/gitleaks' | sha256sum --check -
           test "$(/tmp/gitleaks/gitleaks version)" = "8.24.3"
           /tmp/gitleaks/gitleaks git --no-banner --redact --log-opts=--all .
           /tmp/gitleaks/gitleaks dir --no-banner --redact .
