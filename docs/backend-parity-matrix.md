@@ -71,6 +71,7 @@ This document maps the Python SDK surface (`videovector`) to backend API endpoin
 | `exports.create_prompt_run_export` | `POST` | `/exports/prompt-run/{run_id}` | `ExportCreateResult` | `write` |
 | `exports.retrieve` | `GET` | `/exports/{export_id}` | `Export` | `read` |
 | `exports.list` | `GET` | `/exports` | `List[Export]` | `read` |
+| `exports.download_url` | `POST` | `/exports/{export_id}/download-url` | validated `Optional[str]` bearer capability | `read` |
 | `exports.iter_download` / `exports.download` | `GET` | `/exports/{export_id}/download` | bounded byte stream | `read` |
 | `webhooks.create` | `POST` | `/webhooks` | `WebhookWithSecret` | `write` |
 | `webhooks.retrieve` | `GET` | `/webhooks/{webhook_id}` | `Webhook` | `read` |

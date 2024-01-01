@@ -33,6 +33,11 @@ class SyncHttpClient:
             headers=self._default_headers(),
         )
 
+    @property
+    def base_url(self) -> str:
+        """Configured API base URL used to validate security-sensitive responses."""
+        return self._config.base_url
+
     def _default_headers(self) -> Dict[str, str]:
         headers = {
             "Accept": "application/json",
@@ -118,16 +123,13 @@ class SyncHttpClient:
                     continue
 
                 if response.status_code >= 400:
-                    try:
-                        body = response.json()
-                    except Exception:
-                        body = {"message": response.text}
+                    body = _decode_error_body(response)
                     _raise_for_status(response.status_code, body)
 
                 if response.status_code == 204:
                     return {}
 
-                return response.json()
+                return _decode_json_response(response)
 
             except httpx.TimeoutException as e:
                 last_exception = TimeoutError(f"Request timed out: {e}")
@@ -310,6 +312,11 @@ class AsyncHttpClient:
         self._config = config
         self._client: Optional[httpx.AsyncClient] = None
 
+    @property
+    def base_url(self) -> str:
+        """Configured API base URL used to validate security-sensitive responses."""
+        return self._config.base_url
+
     def _default_headers(self) -> Dict[str, str]:
         headers = {
             "Accept": "application/json",
@@ -407,16 +414,13 @@ class AsyncHttpClient:
                     continue
 
                 if response.status_code >= 400:
-                    try:
-                        body = response.json()
-                    except Exception:
-                        body = {"message": response.text}
+                    body = _decode_error_body(response)
                     _raise_for_status(response.status_code, body)
 
                 if response.status_code == 204:
                     return {}
 
-                return response.json()
+                return _decode_json_response(response)
 
             except httpx.TimeoutException as e:
                 last_exception = TimeoutError(f"Request timed out: {e}")
@@ -604,11 +608,7 @@ class AsyncHttpClient:
 
 def _raise_rate_limit_response(response: httpx.Response, *, retry_after: int) -> None:
     """Preserve the API's structured 429 contract on the typed SDK error."""
-    try:
-        parsed_body = response.json()
-        body = parsed_body if isinstance(parsed_body, dict) else {"message": response.text}
-    except Exception:
-        body = {"message": response.text or "Rate limit exceeded"}
+    body = _decode_error_body(response, default_message="Rate limit exceeded")
 
     try:
         _raise_for_status(429, body)
@@ -712,12 +712,50 @@ def _raise_stream_error(response: httpx.Response) -> None:
             response,
             retry_after=_get_retry_after(response),
         )
-    try:
-        parsed_body = response.json()
-        body = parsed_body if isinstance(parsed_body, dict) else {"message": response.text}
-    except Exception:
-        body = {"message": response.text or "Download request failed"}
+    body = _decode_error_body(
+        response,
+        default_message="Download request failed",
+    )
     _raise_for_status(response.status_code, body)
+
+
+_INVALID_JSON = object()
+
+
+def _try_decode_json(response: httpx.Response) -> Any:
+    """Decode JSON without retaining decoder exceptions or their raw document."""
+    decoded: Any = _INVALID_JSON
+    try:
+        decoded = response.json()
+    except Exception:
+        # JSONDecodeError retains its source document on ``.doc``. Never chain or
+        # re-raise it because successful API responses may contain credentials.
+        pass
+    return decoded
+
+
+def _decode_json_response(response: httpx.Response) -> Any:
+    """Decode a successful API response through a credential-safe boundary."""
+    decoded = _try_decode_json(response)
+    if decoded is _INVALID_JSON:
+        raise VideoVectorError(
+            "API returned an invalid JSON response",
+            status_code=502,
+            error_code="invalid_json_response",
+        ) from None
+    return decoded
+
+
+def _decode_error_body(
+    response: httpx.Response,
+    *,
+    default_message: str = "API request failed",
+) -> Dict[str, Any]:
+    """Return structured errors without copying arbitrary response text."""
+    decoded = _try_decode_json(response)
+    if isinstance(decoded, dict):
+        return decoded
+    return {"message": default_message}
 
 
 def _clean_params(params: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

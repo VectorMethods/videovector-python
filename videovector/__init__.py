@@ -101,6 +101,7 @@ from ._types import (
     ExecutePromptTarget,
     Export,
     ExportCreateResult,
+    ExportDownloadUrlResult,
     ExportStatus,
     ExportType,
     FilterCondition,
@@ -227,6 +228,7 @@ __all__ = [
     # Types - Exports
     "Export",
     "ExportCreateResult",
+    "ExportDownloadUrlResult",
     # Types - Webhooks
     "Webhook",
     "WebhookWithSecret",

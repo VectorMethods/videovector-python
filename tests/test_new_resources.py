@@ -9,6 +9,7 @@ from typing import Any, Optional, get_args, get_type_hints
 
 import pytest
 
+from videovector._exceptions import VideoVectorError
 from videovector._types import FilterCondition
 from videovector.resources.connectors import AsyncConnectorsResource, ConnectorsResource
 from videovector.resources.exports import (
@@ -25,6 +26,8 @@ from videovector.resources.search import AsyncSearchResource, SearchResource
 from videovector.resources.usage import AsyncUsageResource, UsageResource
 from videovector.resources.videos import AsyncVideosResource, VideosResource
 from videovector.resources.webhooks import AsyncWebhooksResource, WebhooksResource
+
+VALID_EXPORT_DOWNLOAD_TOKEN = f"v1.{'a' * 64}.{'b' * 43}"
 
 
 def test_export_download_default_matches_backend_artifact_ceiling() -> None:
@@ -535,6 +538,7 @@ class _FakeSyncHttp:
     def __init__(self, responses: dict[tuple[str, str], Any]) -> None:
         self.responses = responses
         self.calls: list[dict[str, Any]] = []
+        self.base_url = "https://api.example.test/api/v2"
 
     def get(
         self,
@@ -1439,6 +1443,16 @@ def test_connectors_and_exports_sync() -> None:
             ("POST", "/connectors/azure"): _connector_payload("azure"),
             ("POST", "/exports/index/idx_1"): _export_create_payload("exp_1"),
             ("POST", "/exports/prompt-run/run_1"): _export_create_payload("exp_2"),
+            ("POST", "/exports/exp_1/download-url"): {
+                "export_id": "exp_1",
+                "status": "completed",
+                "destination_type": "download",
+                "destination_connector_id": None,
+                "download_url": (
+                    "https://api.example.test/api/v2/exports/exp_1/download"
+                    f"?token={VALID_EXPORT_DOWNLOAD_TOKEN}"
+                ),
+            },
         }
     )
     connectors = ConnectorsResource(http)  # type: ignore[arg-type]
@@ -1523,6 +1537,21 @@ def test_connectors_and_exports_sync() -> None:
     }
     assert http.calls[4]["idempotency_key"] == "idem-exp-2"
 
+    download_url = exports.download_url("exp_1")
+    assert download_url == (
+        "https://api.example.test/api/v2/exports/exp_1/download"
+        f"?token={VALID_EXPORT_DOWNLOAD_TOKEN}"
+    )
+    assert http.calls[5] == {
+        "method": "POST",
+        "endpoint": "/exports/exp_1/download-url",
+        "json": None,
+        "data": None,
+        "files": None,
+        "params": None,
+        "idempotency_key": None,
+    }
+
 
 def test_connectors_and_exports_async() -> None:
     http = _FakeAsyncHttp(
@@ -1532,6 +1561,13 @@ def test_connectors_and_exports_async() -> None:
             ("POST", "/connectors/azure"): _connector_payload("azure"),
             ("POST", "/exports/index/idx_1"): _export_create_payload("exp_1"),
             ("POST", "/exports/prompt-run/run_1"): _export_create_payload("exp_2"),
+            ("POST", "/exports/exp_2/download-url"): {
+                "export_id": "exp_2",
+                "status": "completed",
+                "destination_type": "connector",
+                "destination_connector_id": "conn_1",
+                "download_url": None,
+            },
         }
     )
     connectors = AsyncConnectorsResource(http)  # type: ignore[arg-type]
@@ -1604,7 +1640,259 @@ def test_connectors_and_exports_async() -> None:
         }
         assert http.calls[4]["idempotency_key"].startswith("export-create:")
 
+        assert await exports.download_url("exp_2") is None
+        assert http.calls[5] == {
+            "method": "POST",
+            "endpoint": "/exports/exp_2/download-url",
+            "json": None,
+            "data": None,
+            "files": None,
+            "params": None,
+            "idempotency_key": None,
+        }
+
     asyncio.run(_run())
+
+
+def test_export_download_url_rejects_a_cross_export_response() -> None:
+    http = _FakeSyncHttp(
+        {
+            ("POST", "/exports/exp_1/download-url"): {
+                "export_id": "exp_2",
+                "status": "completed",
+                "destination_type": "download",
+                "destination_connector_id": None,
+                "download_url": (
+                    "https://api.example.test/api/v2/exports/exp_2/download"
+                    f"?token={VALID_EXPORT_DOWNLOAD_TOKEN}"
+                ),
+            },
+        }
+    )
+    exports = ExportsResource(http)  # type: ignore[arg-type]
+
+    with pytest.raises(VideoVectorError) as exc_info:
+        exports.download_url("exp_1")
+
+    assert exc_info.value.error_code == "invalid_export_download_url_response"
+    assert exc_info.value.status_code == 502
+
+
+@pytest.mark.parametrize("use_async_client", [False, True], ids=["sync", "async"])
+def test_export_download_url_does_not_echo_response_derived_export_id(
+    use_async_client: bool,
+) -> None:
+    response_credential = "v1.x.y"
+    response = {
+        "export_id": response_credential,
+        "status": "completed",
+        "destination_type": "download",
+        "destination_connector_id": None,
+        "download_url": (
+            "https://api.example.test/api/v2/exports/exp_1/download"
+            f"?token={VALID_EXPORT_DOWNLOAD_TOKEN}"
+        ),
+    }
+    if use_async_client:
+        http = _FakeAsyncHttp({("POST", "/exports/exp_1/download-url"): response})
+        exports = AsyncExportsResource(http)  # type: ignore[arg-type]
+
+        async def _call() -> None:
+            await exports.download_url("exp_1")
+
+        with pytest.raises(VideoVectorError) as exc_info:
+            asyncio.run(_call())
+    else:
+        http = _FakeSyncHttp({("POST", "/exports/exp_1/download-url"): response})
+        exports = ExportsResource(http)  # type: ignore[arg-type]
+        with pytest.raises(VideoVectorError) as exc_info:
+            exports.download_url("exp_1")
+
+    error = exc_info.value
+    assert error.error_code == "invalid_export_download_url_response"
+    assert error.status_code == 502
+    assert error.details == {}
+    assert response_credential not in str(error)
+    assert response_credential not in repr(error)
+    assert response_credential not in repr(error.args)
+    assert response_credential not in repr(error.details)
+    assert error.__cause__ is None
+    assert error.__context__ is None
+
+
+def test_export_download_url_rejects_a_malformed_response_without_echoing_it() -> None:
+    bearer_credential = "do-not-echo-this-bearer-credential"
+    http = _FakeSyncHttp(
+        {
+            ("POST", "/exports/exp_1/download-url"): {
+                "export_id": "exp_1",
+                "status": "processing",
+                "destination_type": "download",
+                "destination_connector_id": None,
+                "download_url": bearer_credential,
+            },
+        }
+    )
+    exports = ExportsResource(http)  # type: ignore[arg-type]
+
+    with pytest.raises(VideoVectorError) as exc_info:
+        exports.download_url("exp_1")
+
+    assert exc_info.value.error_code == "invalid_export_download_url_response"
+    assert exc_info.value.status_code == 502
+    assert bearer_credential not in str(exc_info.value)
+    assert bearer_credential not in repr(exc_info.value)
+    assert bearer_credential not in repr(exc_info.value.args)
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
+
+
+@pytest.mark.parametrize("use_async_client", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "bearer_credential",
+    [
+        f"http://api.example.test/api/v2/exports/exp_1/download?token={VALID_EXPORT_DOWNLOAD_TOKEN}",
+        f"https://attacker.example/api/v2/exports/exp_1/download?token={VALID_EXPORT_DOWNLOAD_TOKEN}",
+        f"https://user:password@api.example.test/api/v2/exports/exp_1/download?token={VALID_EXPORT_DOWNLOAD_TOKEN}",
+        f"https://api.example.test:444/api/v2/exports/exp_1/download?token={VALID_EXPORT_DOWNLOAD_TOKEN}",
+        f"https://api.example.test:0/api/v2/exports/exp_1/download?token={VALID_EXPORT_DOWNLOAD_TOKEN}",
+        f"https://api.example.test:/api/v2/exports/exp_1/download?token={VALID_EXPORT_DOWNLOAD_TOKEN}",
+        f"https://api.example.test/api/v2/exports/exp_2/download?token={VALID_EXPORT_DOWNLOAD_TOKEN}",
+        f"https://api.example.test/api/v2/exports/exp_1/download?token={VALID_EXPORT_DOWNLOAD_TOKEN}#credential",
+        f"https://api.example.test/api/v2/exports/exp_1/download?token={VALID_EXPORT_DOWNLOAD_TOKEN}#",
+        (
+            "https://api.example.test/api/v2/exports/exp_1/download"
+            f"?token={VALID_EXPORT_DOWNLOAD_TOKEN}&next=https%3A%2F%2Fattacker.example"
+        ),
+        (
+            "https://api.example.test/api/v2/exports/exp_1/download"
+            f"?token={VALID_EXPORT_DOWNLOAD_TOKEN}&token={VALID_EXPORT_DOWNLOAD_TOKEN}"
+        ),
+        (
+            "https://api.example.test/api/v2/exports/exp_1/download"
+            f"?access_token={VALID_EXPORT_DOWNLOAD_TOKEN}"
+        ),
+        ("https://api.example.test/api/v2/exports/exp_1/download" "?token=bad"),
+        ("https://api.example.test/api/v2/exports/exp_1/download" "?token=v1.a.b"),
+        (
+            "https://api.example.test/api/v2/exports/exp_1/download?token=v1."
+            + ("a" * 2048)
+            + ".signature"
+        ),
+    ],
+    ids=[
+        "http",
+        "host",
+        "userinfo",
+        "port",
+        "zero-port",
+        "empty-port",
+        "cross-export-path",
+        "fragment",
+        "empty-fragment",
+        "extra-query",
+        "duplicate-token",
+        "wrong-query-key",
+        "token-shape",
+        "token-too-short",
+        "token-size",
+    ],
+)
+def test_export_download_url_rejects_hostile_capability_shapes_without_echoing(
+    bearer_credential: str,
+    use_async_client: bool,
+) -> None:
+    response = {
+        "export_id": "exp_1",
+        "status": "completed",
+        "destination_type": "download",
+        "destination_connector_id": None,
+        "download_url": bearer_credential,
+    }
+    if use_async_client:
+        http = _FakeAsyncHttp({("POST", "/exports/exp_1/download-url"): response})
+        exports = AsyncExportsResource(http)  # type: ignore[arg-type]
+
+        async def _call() -> None:
+            await exports.download_url("exp_1")
+
+        with pytest.raises(VideoVectorError) as exc_info:
+            asyncio.run(_call())
+    else:
+        http = _FakeSyncHttp({("POST", "/exports/exp_1/download-url"): response})
+        exports = ExportsResource(http)  # type: ignore[arg-type]
+        with pytest.raises(VideoVectorError) as exc_info:
+            exports.download_url("exp_1")
+
+    error = exc_info.value
+    assert error.error_code == "invalid_export_download_url_response"
+    assert error.status_code == 502
+    assert bearer_credential not in str(error)
+    assert bearer_credential not in repr(error)
+    assert bearer_credential not in repr(error.args)
+    assert error.__cause__ is None
+    assert error.__context__ is None
+
+
+@pytest.mark.parametrize("use_async_client", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "configured_base_url",
+    [
+        "http://api.example.test/api/v2",
+        "https://api.example.test/custom/v2",
+        "https://api.example.test/api/v2?tenant=unsafe",
+        "https://api.example.test/api/v2?",
+        "https://api.example.test/api/v2#",
+        "https://api.example.test/api/v2/",
+        "https://user:password@api.example.test/api/v2",
+    ],
+    ids=[
+        "http",
+        "path",
+        "query",
+        "empty-query",
+        "empty-fragment",
+        "trailing-slash",
+        "userinfo",
+    ],
+)
+def test_export_download_url_fails_closed_for_noncanonical_configured_api_origin(
+    configured_base_url: str,
+    use_async_client: bool,
+) -> None:
+    bearer_credential = (
+        "https://api.example.test/api/v2/exports/exp_1/download"
+        f"?token={VALID_EXPORT_DOWNLOAD_TOKEN}"
+    )
+    response = {
+        "export_id": "exp_1",
+        "status": "completed",
+        "destination_type": "download",
+        "destination_connector_id": None,
+        "download_url": bearer_credential,
+    }
+    if use_async_client:
+        http = _FakeAsyncHttp({("POST", "/exports/exp_1/download-url"): response})
+        http.base_url = configured_base_url
+        exports = AsyncExportsResource(http)  # type: ignore[arg-type]
+
+        async def _call() -> None:
+            await exports.download_url("exp_1")
+
+        with pytest.raises(VideoVectorError) as exc_info:
+            asyncio.run(_call())
+    else:
+        http = _FakeSyncHttp({("POST", "/exports/exp_1/download-url"): response})
+        http.base_url = configured_base_url
+        exports = ExportsResource(http)  # type: ignore[arg-type]
+        with pytest.raises(VideoVectorError) as exc_info:
+            exports.download_url("exp_1")
+
+    error = exc_info.value
+    assert error.error_code == "invalid_export_download_url_response"
+    assert bearer_credential not in str(error)
+    assert error.__cause__ is None
+    assert error.__context__ is None
 
 
 class _StreamingSyncHttp:

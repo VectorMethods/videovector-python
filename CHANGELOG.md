@@ -13,6 +13,13 @@
 - Added synchronous and asynchronous authenticated export streaming with a
   backend-aligned 64 MiB local byte ceiling, exact full-response validation,
   no partial-response retry, and atomic path writes.
+- Made synchronous and asynchronous `exports.download_url(...)` explicitly
+  mint bounded bearer URLs through the authenticated `/download-url` endpoint.
+  Export status `download_url` fields now unambiguously represent the
+  authenticated `/download` endpoint and never a bearer credential.
+- Bound minted export capabilities to the configured HTTPS API origin, exact
+  export path, and one bounded token query; bearer response models and malformed
+  JSON failures now redact credentials from representations and exceptions.
 - Made an explicit constructor credential authoritative so an unrelated
   ambient API key, bearer token, or auth-mode variable cannot switch or poison
   the selected authentication flow.

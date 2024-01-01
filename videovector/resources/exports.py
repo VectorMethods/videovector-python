@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -20,9 +21,13 @@ from typing import (
     Optional,
     Union,
 )
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 from uuid import uuid4
 
-from .._types import Export, ExportCreateResult
+from pydantic import ValidationError as PydanticValidationError
+
+from .._exceptions import VideoVectorError
+from .._types import Export, ExportCreateResult, ExportDownloadUrlResult
 
 if TYPE_CHECKING:
     from .._http import AsyncHttpClient, SyncHttpClient
@@ -33,6 +38,9 @@ if TYPE_CHECKING:
 # authenticated export download into an unexpectedly large local/network read.
 DEFAULT_EXPORT_DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024
 DEFAULT_EXPORT_DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+MIN_EXPORT_DOWNLOAD_TOKEN_LENGTH = 32
+MAX_EXPORT_DOWNLOAD_TOKEN_LENGTH = 2048
+_EXPORT_DOWNLOAD_TOKEN_PATTERN = re.compile(r"v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\Z")
 
 
 def _resolve_export_idempotency_key(idempotency_key: Optional[str]) -> str:
@@ -41,6 +49,113 @@ def _resolve_export_idempotency_key(idempotency_key: Optional[str]) -> str:
     if candidate:
         return candidate
     return f"export-create:{uuid4().hex}"
+
+
+def _invalid_export_download_url_response() -> VideoVectorError:
+    """Build the one redacted error for every invalid capability response."""
+    return VideoVectorError(
+        "API returned an invalid export download URL response",
+        status_code=502,
+        error_code="invalid_export_download_url_response",
+    )
+
+
+def _parse_export_download_url_response(
+    response: Any,
+    *,
+    expected_export_id: str,
+    configured_base_url: str,
+) -> Optional[str]:
+    """Validate the security-sensitive mint response and bind it to the request."""
+    result: Optional[ExportDownloadUrlResult] = None
+    try:
+        result = ExportDownloadUrlResult.model_validate(response)
+    except PydanticValidationError:
+        # Do not attach the response or the original validation exception: either
+        # can contain the bearer credential this boundary is meant to protect.
+        pass
+    if result is None:
+        raise _invalid_export_download_url_response()
+    if result.export_id != expected_export_id:
+        raise _invalid_export_download_url_response()
+    if result.download_url is None:
+        return None
+    download_url = result.download_url.get_secret_value()
+    if not _is_canonical_export_download_url(
+        download_url,
+        expected_export_id=expected_export_id,
+        configured_base_url=configured_base_url,
+    ):
+        raise _invalid_export_download_url_response()
+    return download_url
+
+
+def _is_canonical_export_download_url(
+    value: str,
+    *,
+    expected_export_id: str,
+    configured_base_url: str,
+) -> bool:
+    """Return whether a minted capability exactly matches the trusted API origin."""
+    if not value or value != value.strip():
+        return False
+    try:
+        configured = urlsplit(configured_base_url)
+        candidate = urlsplit(value)
+        configured_port = 443 if configured.port is None else configured.port
+        candidate_port = 443 if candidate.port is None else candidate.port
+    except (TypeError, ValueError):
+        return False
+
+    if (
+        configured.scheme.lower() != "https"
+        or candidate.scheme.lower() != "https"
+        or not configured.hostname
+        or not candidate.hostname
+        or configured.username is not None
+        or configured.password is not None
+        or configured.path != "/api/v2"
+        or configured.query
+        or configured.fragment
+        or "?" in configured_base_url
+        or "#" in configured_base_url
+        or configured.netloc.endswith(":")
+        or candidate.username is not None
+        or candidate.password is not None
+        or candidate.fragment
+        or "#" in value
+        or candidate.netloc.endswith(":")
+        or configured_port <= 0
+        or candidate_port <= 0
+        or configured.hostname.lower() != candidate.hostname.lower()
+        or configured_port != candidate_port
+    ):
+        return False
+
+    expected_path = f"/api/v2/exports/{quote(expected_export_id, safe='')}/download"
+    if candidate.path != expected_path:
+        return False
+
+    try:
+        query_items = parse_qsl(
+            candidate.query,
+            keep_blank_values=True,
+            strict_parsing=True,
+            max_num_fields=2,
+        )
+    except ValueError:
+        return False
+    if len(query_items) != 1 or query_items[0][0] != "token":
+        return False
+    token = query_items[0][1]
+    if (
+        not token
+        or len(token) < MIN_EXPORT_DOWNLOAD_TOKEN_LENGTH
+        or len(token) > MAX_EXPORT_DOWNLOAD_TOKEN_LENGTH
+        or _EXPORT_DOWNLOAD_TOKEN_PATTERN.fullmatch(token) is None
+    ):
+        return False
+    return candidate.query == urlencode({"token": token})
 
 
 async def _to_thread_settled(callback: Any, *args: Any, **kwargs: Any) -> Any:
@@ -204,7 +319,9 @@ class ExportsResource:
             export_id: Export ID
 
         Returns:
-            Export: Export details including status and download URL
+            Export: Export details. ``download_url`` is an authenticated API
+                endpoint when direct download is available; it is never a
+                bearer credential.
 
         Raises:
             NotFoundError: If export doesn't exist
@@ -241,7 +358,8 @@ class ExportsResource:
             timeout: Maximum seconds to wait (None for no timeout)
 
         Returns:
-            Export: Completed export with download URL
+            Export: Completed export status. The model's ``download_url`` is
+                an authenticated API endpoint, not a bearer credential.
 
         Raises:
             TimeoutError: If timeout is reached
@@ -274,11 +392,14 @@ class ExportsResource:
 
     def download_url(self, export_id: str) -> Optional[str]:
         """
-        Get the legacy bounded bearer URL for a completed export.
+        Mint a bounded bearer URL for an owned completed direct export.
 
+        This performs an authenticated POST to the explicit mint endpoint.
         The returned URL is short-lived and must be treated as sensitive.
-        Prefer :meth:`download` or :meth:`iter_download` so authentication and
-        local byte ceilings are applied directly by the SDK.
+        ``Export.download_url`` has different semantics: status responses expose
+        the authenticated download endpoint there and never include a bearer
+        token. Prefer :meth:`download` or :meth:`iter_download` so authentication
+        and local byte ceilings are applied directly by the SDK.
 
         Args:
             export_id: Export ID
@@ -289,8 +410,12 @@ class ExportsResource:
         Raises:
             NotFoundError: If export doesn't exist
         """
-        export = self.retrieve(export_id)
-        return export.download_url
+        response = self._client.post(f"/exports/{export_id}/download-url")
+        return _parse_export_download_url_response(
+            response,
+            expected_export_id=export_id,
+            configured_base_url=self._client.base_url,
+        )
 
     def iter_download(
         self,
@@ -475,9 +600,13 @@ class AsyncExportsResource:
             await asyncio.sleep(poll_interval)
 
     async def download_url(self, export_id: str) -> Optional[str]:
-        """Get a short-lived bounded bearer URL; prefer authenticated streaming."""
-        export = await self.retrieve(export_id)
-        return export.download_url
+        """Mint a bounded bearer URL; prefer authenticated streaming."""
+        response = await self._client.post(f"/exports/{export_id}/download-url")
+        return _parse_export_download_url_response(
+            response,
+            expected_export_id=export_id,
+            configured_base_url=self._client.base_url,
+        )
 
     async def iter_download(
         self,

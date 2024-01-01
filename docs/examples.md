@@ -18,4 +18,7 @@ Some examples require additional values, such as `VIDEO_VECTOR_MEDIA_FILE`, conn
 - Use idempotency keys for retryable writes.
 - Point `VIDEO_VECTOR_BASE_URL` to the intended deployment before running against production data.
 - Review connector scopes before granting import or export access.
-
+- Prefer authenticated `exports.download(...)` for direct exports. If an
+  integration must mint a bounded bearer URL with `exports.download_url(...)`,
+  do not print, log, or persist it; keep the configured API origin on HTTPS so
+  the SDK can validate the capability before returning it.

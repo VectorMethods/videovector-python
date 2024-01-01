@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+from urllib.parse import quote
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 # =============================================================================
 # Enums
@@ -802,7 +803,9 @@ class TestConnectionResult(BaseModel):
 
 
 class Export(BaseModel):
-    """Metadata export job representation."""
+    """Metadata export job representation returned by authenticated status APIs."""
+
+    model_config = ConfigDict(hide_input_in_errors=True)
 
     export_id: str
     user_id: Optional[str] = None
@@ -811,15 +814,62 @@ class Export(BaseModel):
     status: str
     created_at: Optional[str] = None
     gcs_uri: Optional[str] = None
-    download_url: Optional[str] = None
+    download_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "Authenticated first-party download endpoint for a completed direct "
+            "export. This status field is not a bearer URL."
+        ),
+    )
     file_size_bytes: Optional[int] = None
     error_message: Optional[str] = None
     export_params: Optional[Dict[str, Any]] = None
-    destination_type: Optional[str] = None
+    queue_status: Optional[str] = None
+    attempts: int = 0
+    max_attempts: int = 1
+    available_at: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    last_error: Optional[str] = None
+    destination_type: Optional[Literal["download", "connector"]] = None
     destination_connector_id: Optional[str] = None
     destination_base_path: Optional[str] = None
     destination_subpath: Optional[str] = None
     destination_uri: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_delivery_contract(self) -> "Export":
+        """Keep status responses separate from explicit bearer capabilities."""
+        export_id = self.export_id.strip()
+        if not export_id or export_id != self.export_id:
+            raise ValueError("export_id must be canonical and non-empty")
+
+        connector_id = self.destination_connector_id
+        if self.destination_type == "connector":
+            if (
+                connector_id is None
+                or not connector_id.strip()
+                or connector_id != connector_id.strip()
+            ):
+                raise ValueError("connector delivery requires a canonical connector ID")
+            if self.download_url is not None:
+                raise ValueError("connector delivery cannot include a download endpoint")
+        elif self.destination_type == "download":
+            if connector_id is not None:
+                raise ValueError("direct download cannot identify a connector destination")
+        elif connector_id is not None or self.download_url is not None:
+            raise ValueError("delivery metadata requires an explicit destination type")
+
+        if self.download_url is not None:
+            expected_path = f"/api/v2/exports/{quote(export_id, safe='')}/download"
+            if self.download_url != expected_path:
+                raise ValueError("download_url must be the canonical authenticated export endpoint")
+            if self.status != ExportStatus.COMPLETED.value:
+                raise ValueError("only a completed export can include a download endpoint")
+            if self.queue_status != "succeeded":
+                raise ValueError("only a durably succeeded export can include a download endpoint")
+        return self
 
 
 class ExportCreateResult(BaseModel):
@@ -827,6 +877,49 @@ class ExportCreateResult(BaseModel):
 
     export_id: str
     status: str
+
+
+class ExportDownloadUrlResult(BaseModel):
+    """Result of explicitly minting a bounded export bearer URL."""
+
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    export_id: str
+    status: ExportStatus
+    destination_type: Literal["download", "connector"]
+    destination_connector_id: Optional[str] = None
+    download_url: Optional[SecretStr] = Field(
+        default=None,
+        repr=False,
+        description=(
+            "Short-lived bounded bearer URL, or None when the owned export is "
+            "not available for direct download."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_delivery_contract(self) -> "ExportDownloadUrlResult":
+        if not self.export_id.strip() or self.export_id != self.export_id.strip():
+            raise ValueError("export_id must be canonical and non-empty")
+        if self.destination_type == "connector":
+            connector_id = self.destination_connector_id
+            if (
+                connector_id is None
+                or not connector_id.strip()
+                or connector_id != connector_id.strip()
+            ):
+                raise ValueError("connector delivery requires a canonical connector ID")
+            if self.download_url is not None:
+                raise ValueError("connector delivery cannot include a bearer URL")
+        elif self.destination_connector_id is not None:
+            raise ValueError("direct download cannot include destination_connector_id")
+        if self.download_url is not None:
+            raw_download_url = self.download_url.get_secret_value()
+            if not raw_download_url.strip() or raw_download_url != raw_download_url.strip():
+                raise ValueError("download_url must not be empty")
+            if self.status != ExportStatus.COMPLETED:
+                raise ValueError("only a completed export can include a bearer URL")
+        return self
 
 
 # =============================================================================

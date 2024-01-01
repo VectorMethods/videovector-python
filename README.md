@@ -98,6 +98,20 @@ client.exports.download(export.export_id, "metadata.json")
 Use `iter_download` when your application needs to process chunks directly.
 Connector-delivered exports remain in the configured destination.
 
+Export status models expose an authenticated `/download` endpoint in
+`export.download_url`; that field is not a bearer credential. When a browser or
+another bounded client specifically needs a short-lived bearer URL, mint one
+explicitly and avoid logging or persisting it:
+
+```python
+bounded_url = client.exports.download_url(export.export_id)
+```
+
+The SDK accepts this capability only from the configured HTTPS API origin and
+only when its path, export ID, query shape, and bounded token match the backend
+contract. The returned string is intentionally unwrapped for the caller, so it
+must still be handled like a credential.
+
 ## Pagination
 
 Paginated endpoints return `SyncPage[T]` or `AsyncPage[T]`.

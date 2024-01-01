@@ -94,6 +94,54 @@ def test_sync_multipart_upload_sets_form_content_type() -> None:
     assert "application/json" not in captured["content_type"]
 
 
+@pytest.mark.parametrize("status_code", [200, 502], ids=["success", "error"])
+def test_sync_http_malformed_json_does_not_retain_sensitive_response(
+    status_code: int,
+) -> None:
+    bearer_credential = "https://api.example.test/api/v2/exports/exp_1/download" "?token=v1.a.b"
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code,
+            headers={"Content-Type": "application/json"},
+            content=(
+                '{"export_id":"exp_1","download_url":"' + bearer_credential + '" BROKEN'
+            ).encode(),
+        )
+
+    cfg = ClientConfig.from_env(
+        api_key="vv_test_api_key",
+        base_url="https://api.example.test/api/v2",
+        max_retries=0,
+    )
+    client = SyncHttpClient(cfg)
+    client._client.close()
+    client._client = httpx.Client(
+        base_url=cfg.base_url,
+        headers=client._default_headers(),
+        transport=httpx.MockTransport(handler),
+    )
+
+    try:
+        with pytest.raises(VideoVectorError) as exc_info:
+            client.post("/exports/exp_1/download-url")
+    finally:
+        client.close()
+
+    error = exc_info.value
+    assert bearer_credential not in str(error)
+    assert bearer_credential not in repr(error)
+    assert bearer_credential not in repr(error.args)
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    if status_code == 200:
+        assert error.error_code == "invalid_json_response"
+        assert error.status_code == 502
+    else:
+        assert isinstance(error, ExternalServiceError)
+        assert error.status_code == status_code
+
+
 def test_sync_binary_stream_is_authenticated_bounded_and_not_json_decoded() -> None:
     captured: dict[str, str] = {}
     calls = 0
@@ -579,6 +627,55 @@ def test_async_multipart_upload_sets_form_content_type() -> None:
     asyncio.run(_run())
 
     assert captured["content_type"].startswith("multipart/form-data")
+
+
+@pytest.mark.parametrize("status_code", [200, 502], ids=["success", "error"])
+def test_async_http_malformed_json_does_not_retain_sensitive_response(
+    status_code: int,
+) -> None:
+    bearer_credential = "https://api.example.test/api/v2/exports/exp_1/download" "?token=v1.a.b"
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code,
+            headers={"Content-Type": "application/json"},
+            content=(
+                '{"export_id":"exp_1","download_url":"' + bearer_credential + '" BROKEN'
+            ).encode(),
+        )
+
+    cfg = ClientConfig.from_env(
+        api_key="vv_test_api_key",
+        base_url="https://api.example.test/api/v2",
+        max_retries=0,
+    )
+    client = AsyncHttpClient(cfg)
+    client._client = httpx.AsyncClient(
+        base_url=cfg.base_url,
+        headers=client._default_headers(),
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def _run() -> VideoVectorError:
+        try:
+            with pytest.raises(VideoVectorError) as exc_info:
+                await client.post("/exports/exp_1/download-url")
+            return exc_info.value
+        finally:
+            await client.close()
+
+    error = asyncio.run(_run())
+    assert bearer_credential not in str(error)
+    assert bearer_credential not in repr(error)
+    assert bearer_credential not in repr(error.args)
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    if status_code == 200:
+        assert error.error_code == "invalid_json_response"
+        assert error.status_code == 502
+    else:
+        assert isinstance(error, ExternalServiceError)
+        assert error.status_code == status_code
 
 
 def test_async_binary_stream_is_authenticated_bounded_and_not_retried() -> None:
