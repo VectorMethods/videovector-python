@@ -16,13 +16,14 @@ from .._pagination import (
     _parse_paginated_response_async,
 )
 from .._types import (
-    DeleteResponse,
+    BatchVideoSegmentsTarget,
     ProcessingStartedResponse,
     PromptRun,
     Segment,
     SignedUrl,
     UploadResult,
     Video,
+    VideoDeletionResponse,
     VideoSegments,
     VideoStatus,
     VideoWithDetails,
@@ -30,6 +31,24 @@ from .._types import (
 
 if TYPE_CHECKING:
     from .._http import AsyncHttpClient, SyncHttpClient
+
+
+def _batch_segments_payload(
+    *,
+    video_ids: Optional[List[str]] = None,
+    targets: Optional[List[BatchVideoSegmentsTarget]] = None,
+) -> dict[str, Any]:
+    if video_ids is not None and targets is not None:
+        raise ValueError("video_ids and targets are mutually exclusive")
+    if targets is not None:
+        if not targets:
+            raise ValueError("targets must not be empty")
+        return {"targets": [target.model_dump(exclude_none=True) for target in targets]}
+    if video_ids is not None:
+        if not video_ids:
+            raise ValueError("video_ids must not be empty")
+        return {"video_ids": video_ids}
+    raise ValueError("Either video_ids or targets must be provided")
 
 
 class VideosResource:
@@ -67,6 +86,7 @@ class VideosResource:
         title: str,
         video_uri: str,
         index_id: str,
+        source_connector_id: Optional[str] = None,
     ) -> Video:
         """
         Create a video from an existing GCS URI.
@@ -75,6 +95,9 @@ class VideosResource:
             title: Video title (1-255 characters)
             video_uri: GCS URI of the video (gs://bucket/path)
             index_id: Target index ID
+            source_connector_id: Optional caller-owned connector used to import a
+                private external GCS object. Public and platform-managed objects
+                do not require this field.
 
         Returns:
             Video: Created video object
@@ -83,14 +106,14 @@ class VideosResource:
             ValidationError: If parameters are invalid
             NotFoundError: If index doesn't exist
         """
-        response = self._client.post(
-            "/videos",
-            json={
-                "title": title,
-                "video_uri": video_uri,
-                "index_id": index_id,
-            },
-        )
+        payload = {
+            "title": title,
+            "video_uri": video_uri,
+            "index_id": index_id,
+        }
+        if source_connector_id is not None:
+            payload["source_connector_id"] = source_connector_id
+        response = self._client.post("/videos", json=payload)
         return Video.model_validate(response)
 
     def upload(
@@ -153,22 +176,28 @@ class VideosResource:
         response = self._client.get(f"/videos/{video_id}")
         return Video.model_validate(response)
 
-    def delete(self, video_id: str) -> DeleteResponse:
+    def delete(self, video_id: str) -> VideoDeletionResponse:
         """
-        Delete a video.
+        Start or resume durable video deletion.
 
         Args:
             video_id: Video ID to delete
 
         Returns:
-            DeleteResponse: Confirmation message
+            VideoDeletionResponse: Durable deletion identity and progress
 
         Raises:
             NotFoundError: If video doesn't exist
             AuthorizationError: If admin scope is required
         """
         response = self._client.delete(f"/videos/{video_id}")
-        return DeleteResponse.model_validate(response)
+        return VideoDeletionResponse.model_validate(response)
+
+    def get_deletion(self, video_id: str) -> VideoDeletionResponse:
+        """Retrieve durable deletion progress for a video."""
+
+        response = self._client.get(f"/videos/{video_id}/deletion")
+        return VideoDeletionResponse.model_validate(response)
 
     def process(
         self,
@@ -283,10 +312,29 @@ class VideosResource:
         Returns:
             List[VideoSegments]: List of video segments with video_id and segments list
         """
-        response = self._client.post("/videos/batch/segments", json={"video_ids": video_ids})
+        response = self._client.post(
+            "/videos/batch/segments",
+            json=_batch_segments_payload(video_ids=video_ids),
+        )
         return [VideoSegments.model_validate(v) for v in response]
 
-    def get_signed_url(self, gcs_uri: str) -> SignedUrl:
+    def batch_segments_for_targets(
+        self,
+        targets: List[BatchVideoSegmentsTarget],
+    ) -> List[VideoSegments]:
+        """Get segments for media targets, optionally scoped to prompt runs."""
+        response = self._client.post(
+            "/videos/batch/segments",
+            json=_batch_segments_payload(targets=targets),
+        )
+        return [VideoSegments.model_validate(v) for v in response]
+
+    def get_signed_url(
+        self,
+        gcs_uri: str,
+        *,
+        force_refresh: bool = False,
+    ) -> SignedUrl:
         """
         Generate a signed URL for accessing a GCS resource.
 
@@ -296,7 +344,10 @@ class VideosResource:
         Returns:
             SignedUrl: Signed URL with expiration
         """
-        response = self._client.post("/videos/signed-url", json={"gcs_uri": gcs_uri})
+        payload: dict[str, Any] = {"gcs_uri": gcs_uri}
+        if force_refresh:
+            payload["force_refresh"] = True
+        response = self._client.post("/videos/signed-url", json=payload)
         return SignedUrl.model_validate(response)
 
     def list_prompt_runs(self, video_id: str, *, limit: Optional[int] = None) -> List[PromptRun]:
@@ -373,16 +424,17 @@ class AsyncVideosResource:
         title: str,
         video_uri: str,
         index_id: str,
+        source_connector_id: Optional[str] = None,
     ) -> Video:
-        """Create a video from an existing GCS URI."""
-        response = await self._client.post(
-            "/videos",
-            json={
-                "title": title,
-                "video_uri": video_uri,
-                "index_id": index_id,
-            },
-        )
+        """Create a video from GCS, optionally through an owned connector."""
+        payload = {
+            "title": title,
+            "video_uri": video_uri,
+            "index_id": index_id,
+        }
+        if source_connector_id is not None:
+            payload["source_connector_id"] = source_connector_id
+        response = await self._client.post("/videos", json=payload)
         return Video.model_validate(response)
 
     async def upload(
@@ -420,10 +472,16 @@ class AsyncVideosResource:
         response = await self._client.get(f"/videos/{video_id}")
         return Video.model_validate(response)
 
-    async def delete(self, video_id: str) -> DeleteResponse:
-        """Delete a video."""
+    async def delete(self, video_id: str) -> VideoDeletionResponse:
+        """Start or resume durable video deletion."""
         response = await self._client.delete(f"/videos/{video_id}")
-        return DeleteResponse.model_validate(response)
+        return VideoDeletionResponse.model_validate(response)
+
+    async def get_deletion(self, video_id: str) -> VideoDeletionResponse:
+        """Retrieve durable deletion progress for a video."""
+
+        response = await self._client.get(f"/videos/{video_id}/deletion")
+        return VideoDeletionResponse.model_validate(response)
 
     async def process(
         self,
@@ -487,15 +545,39 @@ class AsyncVideosResource:
         video_ids: List[str],
     ) -> List[VideoSegments]:
         """Get segments for multiple videos."""
-        response = await self._client.post("/videos/batch/segments", json={"video_ids": video_ids})
+        response = await self._client.post(
+            "/videos/batch/segments",
+            json=_batch_segments_payload(video_ids=video_ids),
+        )
         return [VideoSegments.model_validate(v) for v in response]
 
-    async def get_signed_url(self, gcs_uri: str) -> SignedUrl:
+    async def batch_segments_for_targets(
+        self,
+        targets: List[BatchVideoSegmentsTarget],
+    ) -> List[VideoSegments]:
+        """Get segments for media targets, optionally scoped to prompt runs."""
+        response = await self._client.post(
+            "/videos/batch/segments",
+            json=_batch_segments_payload(targets=targets),
+        )
+        return [VideoSegments.model_validate(v) for v in response]
+
+    async def get_signed_url(
+        self,
+        gcs_uri: str,
+        *,
+        force_refresh: bool = False,
+    ) -> SignedUrl:
         """Generate a signed URL for accessing a GCS resource."""
-        response = await self._client.post("/videos/signed-url", json={"gcs_uri": gcs_uri})
+        payload: dict[str, Any] = {"gcs_uri": gcs_uri}
+        if force_refresh:
+            payload["force_refresh"] = True
+        response = await self._client.post("/videos/signed-url", json=payload)
         return SignedUrl.model_validate(response)
 
-    async def list_prompt_runs(self, video_id: str, *, limit: Optional[int] = None) -> List[PromptRun]:
+    async def list_prompt_runs(
+        self, video_id: str, *, limit: Optional[int] = None
+    ) -> List[PromptRun]:
         """List prompt runs that include a video."""
         params = {"limit": limit} if limit is not None else None
         response = await self._client.get(f"/videos/{video_id}/prompt-runs", params=params)

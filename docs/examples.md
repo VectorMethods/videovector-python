@@ -12,10 +12,17 @@ python examples/01_quickstart_upload_search.py
 
 Some examples require additional values, such as `VIDEO_VECTOR_MEDIA_FILE`, connector credentials, or webhook URLs. Each file declares its required environment variables near the top of `main()`.
 
+`20_run_scoped_segment_playback.py` demonstrates
+`BatchVideoSegmentsTarget`, the resolved `VideoSegments.run_id`, and bounded
+signed playback grants without mixing segments from different prompt runs.
+
 ## Safety Rules
 
 - Use test or least-privilege credentials when experimenting.
 - Use idempotency keys for retryable writes.
 - Point `VIDEO_VECTOR_BASE_URL` to the intended deployment before running against production data.
 - Review connector scopes before granting import or export access.
-
+- Prefer authenticated `exports.download(...)` for direct exports. If an
+  integration must mint a bounded bearer URL with `exports.download_url(...)`,
+  do not print, log, or persist it; keep the configured API origin on HTTPS so
+  the SDK can validate the capability before returning it.

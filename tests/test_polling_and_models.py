@@ -4,10 +4,23 @@ import asyncio
 from typing import Any, Optional
 
 import pytest
+from pydantic import SecretStr
+from pydantic import ValidationError as PydanticValidationError
 
-from videovector._types import Export, FilterSearchResponse, LlmCall, SegmentRunResult
+from videovector._types import (
+    Export,
+    ExportDownloadUrlResult,
+    FilterSearchResponse,
+    ImageSearchResult,
+    LlmCall,
+    MultimodalSearchResult,
+    SearchResult,
+    SegmentRunResult,
+)
 from videovector.resources.import_jobs import AsyncImportJobsResource, ImportJobsResource
 from videovector.resources.prompt_runs import AsyncPromptRunsResource, PromptRunsResource
+
+VALID_EXPORT_DOWNLOAD_TOKEN = f"v1.{'a' * 64}.{'b' * 43}"
 
 
 def _prompt_run_payload(status: str) -> dict[str, Any]:
@@ -46,7 +59,13 @@ class _FakeSyncHttp:
         self._responses = responses
         self._idx = 0
 
-    def get(self, endpoint: str, *, params: Optional[dict[str, Any]] = None, headers: Optional[dict[str, str]] = None) -> dict[str, Any]:
+    def get(
+        self,
+        endpoint: str,
+        *,
+        params: Optional[dict[str, Any]] = None,
+        headers: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
         response = self._responses[self._idx]
         self._idx += 1
         return response
@@ -57,7 +76,13 @@ class _FakeAsyncHttp:
         self._responses = responses
         self._idx = 0
 
-    async def get(self, endpoint: str, *, params: Optional[dict[str, Any]] = None, headers: Optional[dict[str, str]] = None) -> dict[str, Any]:
+    async def get(
+        self,
+        endpoint: str,
+        *,
+        params: Optional[dict[str, Any]] = None,
+        headers: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
         response = self._responses[self._idx]
         self._idx += 1
         return response
@@ -109,7 +134,9 @@ class _CaptureAsyncPostHttp(_CaptureSyncPostHttp):
         )
 
 
-def test_prompt_runs_wait_for_completion_accepts_lowercase_status(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_prompt_runs_wait_for_completion_accepts_lowercase_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     http = _FakeSyncHttp([_prompt_run_payload("processing"), _prompt_run_payload("completed")])
     resource = PromptRunsResource(http)  # type: ignore[arg-type]
     monkeypatch.setattr("time.sleep", lambda *_args, **_kwargs: None)
@@ -177,7 +204,9 @@ def test_prompt_runs_wait_for_completion_async_accepts_cancelled() -> None:
     asyncio.run(_run())
 
 
-def test_import_jobs_wait_for_completion_accepts_lowercase_status(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_import_jobs_wait_for_completion_accepts_lowercase_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     http = _FakeSyncHttp([_import_job_payload("importing"), _import_job_payload("completed")])
     resource = ImportJobsResource(http)  # type: ignore[arg-type]
     monkeypatch.setattr("time.sleep", lambda *_args, **_kwargs: None)
@@ -251,13 +280,149 @@ def test_export_model_accepts_backend_payload_without_user_id() -> None:
         "export_type": "index",
         "target_id": "idx_1",
         "created_at": "2026-01-01T00:00:00Z",
-        "status": "processing",
-        "download_url": None,
-        "file_size_bytes": None,
+        "status": "completed",
+        "gcs_uri": "gs://private-exports/exports/user_1/exp_1.json",
+        "queue_status": "succeeded",
+        "attempts": 1,
+        "max_attempts": 3,
+        "available_at": "2026-01-01T00:00:00Z",
+        "started_at": "2026-01-01T00:00:01Z",
+        "completed_at": "2026-01-01T00:00:02Z",
+        "updated_at": "2026-01-01T00:00:02Z",
+        "download_url": "/api/v2/exports/exp_1/download",
+        "file_size_bytes": 1024,
         "error_message": None,
+        "last_error": None,
+        "destination_type": "download",
+        "destination_connector_id": None,
+        "destination_base_path": None,
+        "destination_subpath": None,
+        "destination_uri": None,
     }
     export = Export.model_validate(payload)
     assert export.export_id == "exp_1"
+    assert export.download_url == "/api/v2/exports/exp_1/download"
+    assert export.queue_status == "succeeded"
+    assert export.destination_type == "download"
+
+
+def test_export_download_url_model_rejects_connector_bearer_credentials() -> None:
+    bearer_credential = (
+        "https://api.example.test/api/v2/exports/exp_1/download"
+        f"?token={VALID_EXPORT_DOWNLOAD_TOKEN}"
+    )
+    with pytest.raises(PydanticValidationError) as exc_info:
+        ExportDownloadUrlResult.model_validate(
+            {
+                "export_id": "exp_1",
+                "status": "completed",
+                "destination_type": "connector",
+                "destination_connector_id": "conn_1",
+                "download_url": bearer_credential,
+            }
+        )
+
+    error = exc_info.value
+    assert bearer_credential not in str(error)
+    assert bearer_credential not in repr(error)
+    assert bearer_credential not in repr(error.args)
+    assert error.__cause__ is None
+    assert error.__context__ is None
+
+
+def test_export_download_url_model_redacts_valid_bearer_capability() -> None:
+    bearer_credential = (
+        "https://api.example.test/api/v2/exports/exp_1/download"
+        f"?token={VALID_EXPORT_DOWNLOAD_TOKEN}"
+    )
+    result = ExportDownloadUrlResult.model_validate(
+        {
+            "export_id": "exp_1",
+            "status": "completed",
+            "destination_type": "download",
+            "destination_connector_id": None,
+            "download_url": bearer_credential,
+        }
+    )
+
+    assert isinstance(result.download_url, SecretStr)
+    assert result.download_url.get_secret_value() == bearer_credential
+    assert bearer_credential not in str(result.download_url)
+    assert bearer_credential not in repr(result)
+    assert bearer_credential not in repr(result.model_dump())
+    assert bearer_credential not in repr(result.model_dump(mode="json"))
+    assert bearer_credential not in result.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    ("overrides", "sensitive_value"),
+    [
+        (
+            {
+                "download_url": (
+                    "https://storage.googleapis.test/private" "?X-Goog-Signature=status-secret"
+                )
+            },
+            "status-secret",
+        ),
+        (
+            {"download_url": "https://api.example.test/api/v2/exports/exp_1/download"},
+            "https://api.example.test",
+        ),
+        (
+            {"download_url": "/api/v2/exports/exp_2/download"},
+            "/api/v2/exports/exp_2/download",
+        ),
+        (
+            {"download_url": "/api/v2/exports/exp_1/download?token=status-secret"},
+            "status-secret",
+        ),
+        (
+            {"status": "processing"},
+            "/api/v2/exports/exp_1/download",
+        ),
+        (
+            {"queue_status": "running"},
+            "/api/v2/exports/exp_1/download",
+        ),
+        (
+            {
+                "destination_type": "connector",
+                "destination_connector_id": "conn_1",
+            },
+            "/api/v2/exports/exp_1/download",
+        ),
+        (
+            {"destination_connector_id": "conn_1"},
+            "conn_1",
+        ),
+    ],
+)
+def test_export_status_rejects_noncanonical_download_contract_without_echoing_input(
+    overrides: dict[str, Any],
+    sensitive_value: str,
+) -> None:
+    payload: dict[str, Any] = {
+        "export_id": "exp_1",
+        "export_type": "index",
+        "target_id": "idx_1",
+        "status": "completed",
+        "queue_status": "succeeded",
+        "destination_type": "download",
+        "destination_connector_id": None,
+        "download_url": "/api/v2/exports/exp_1/download",
+    }
+    payload.update(overrides)
+
+    with pytest.raises(PydanticValidationError) as exc_info:
+        Export.model_validate(payload)
+
+    error = exc_info.value
+    assert sensitive_value not in str(error)
+    assert sensitive_value not in repr(error)
+    assert sensitive_value not in repr(error.args)
+    assert error.__cause__ is None
+    assert error.__context__ is None
 
 
 def test_filter_search_response_accepts_paginated_backend_shape() -> None:
@@ -327,3 +492,63 @@ def test_segment_run_result_accepts_video_id() -> None:
     }
     result = SegmentRunResult.model_validate(payload)
     assert result.video_id == "video_1"
+
+
+@pytest.mark.parametrize("result_type", [ImageSearchResult, MultimodalSearchResult])
+def test_visual_search_result_preserves_durable_matched_image_uri(
+    result_type: type[ImageSearchResult] | type[MultimodalSearchResult],
+) -> None:
+    payload: dict[str, Any] = {
+        "result_id": "segment:seg_1:run_1",
+        "video_id": "video_1",
+        "segment_id": "seg_1",
+        "text_content": "sample",
+        "similarity_score": 0.87,
+        "matched_image_uri": "https://media.example.test/bounded",
+        "matched_image_gcs_uri": "gs://managed-media/users/user_1/shots/shot_1.jpg",
+        "shot_timestamp": 10.9,
+    }
+    if result_type is MultimodalSearchResult:
+        payload.update(fused_score=0.91, match_type="both")
+
+    result = result_type.model_validate(payload)
+
+    assert result.matched_image_uri == "https://media.example.test/bounded"
+    assert result.matched_image_gcs_uri == "gs://managed-media/users/user_1/shots/shot_1.jpg"
+    assert result.shot_timestamp == 10.9
+
+
+def test_multimodal_search_result_defaults_durable_matched_image_uri_to_none() -> None:
+    result = MultimodalSearchResult.model_validate(
+        {
+            "result_id": "segment:seg_1:run_1",
+            "video_id": "video_1",
+            "segment_id": "seg_1",
+            "text_content": "sample",
+            "similarity_score": 0.87,
+            "fused_score": 0.91,
+            "match_type": "both",
+            "shot_timestamp": 10.9,
+        }
+    )
+
+    assert result.matched_image_gcs_uri is None
+    assert result.shot_timestamp == 10.9
+
+
+def test_search_result_preserves_nullable_similarity_and_metadata() -> None:
+    result = SearchResult.model_validate(
+        {
+            "result_id": "video:video_1:run_1",
+            "result_type": "video",
+            "video_id": "video_1",
+            "text_content": "sample",
+            "similarity_score": None,
+            "metadata": {"summary": "full metadata"},
+            "extracted_metadata": None,
+        }
+    )
+
+    assert result.similarity_score is None
+    assert result.metadata == {"summary": "full metadata"}
+    assert result.extracted_metadata is None

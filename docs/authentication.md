@@ -35,4 +35,4 @@ The default base URL is `https://api.vectormethods.com/api/v2`. Override it with
 
 ## Secret Handling
 
-Do not log full API keys, bearer tokens, cloud provider credentials, webhook signing secrets, or signed export URLs. Values returned by API key creation, API key rotation, webhook creation, and webhook secret rotation should be persisted immediately to your own secret store.
+Do not log full API keys, bearer tokens, cloud provider credentials, webhook signing secrets, or signed export URLs. Export status `download_url` values are validated authenticated API endpoints; only the explicit `client.exports.download_url(...)` mint call returns a short-lived bearer URL. That mint is accepted only from the configured HTTPS API origin with the exact export-bound path and token query. Values returned by API key creation, API key rotation, webhook creation, and webhook secret rotation should be persisted immediately to your own secret store.

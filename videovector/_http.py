@@ -6,8 +6,12 @@ Low-level HTTP client with retry logic, authentication, and error handling.
 
 from __future__ import annotations
 
+import asyncio
+import math
 import time
-from typing import Any, Dict, Optional
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from typing import Any, AsyncIterator, Dict, Iterator, Optional
 
 import httpx
 
@@ -21,6 +25,26 @@ from ._exceptions import (
 )
 from ._version import __version__
 
+_DEFAULT_RETRY_AFTER_SECONDS = 60
+
+
+def _default_headers_for_config(config: ClientConfig) -> Dict[str, str]:
+    """Build one canonical header set for both sync and async transports."""
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": f"videovector-python/{__version__}",
+    }
+    if config.auth_mode == "bearer" and config.bearer_token:
+        headers["Authorization"] = f"Bearer {config.bearer_token}"
+    elif config.auth_mode == "api_key" and config.api_key:
+        headers["X-API-Key"] = config.api_key
+    elif config.bearer_token:
+        headers["Authorization"] = f"Bearer {config.bearer_token}"
+    elif config.api_key:
+        headers["X-API-Key"] = config.api_key
+    headers.update(config.custom_headers)
+    return headers
+
 
 class SyncHttpClient:
     """Synchronous HTTP client for VideoVector API."""
@@ -33,27 +57,13 @@ class SyncHttpClient:
             headers=self._default_headers(),
         )
 
-    def _default_headers(self) -> Dict[str, str]:
-        headers = {
-            "Accept": "application/json",
-            "User-Agent": f"videovector-python/{__version__}",
-        }
-        if self._config.auth_mode == "bearer" and self._config.bearer_token:
-            headers["Authorization"] = f"Bearer {self._config.bearer_token}"
-        elif self._config.auth_mode == "api_key" and self._config.api_key:
-            headers["X-API-Key"] = self._config.api_key
-        elif self._config.bearer_token:
-            headers["Authorization"] = f"Bearer {self._config.bearer_token}"
-        elif self._config.api_key:
-            headers["X-API-Key"] = self._config.api_key
+    @property
+    def base_url(self) -> str:
+        """Configured API base URL used to validate security-sensitive responses."""
+        return self._config.base_url
 
-        custom_headers = {
-            key: value
-            for key, value in self._config.custom_headers.items()
-            if key.lower() != "content-type"
-        }
-        headers.update(custom_headers)
-        return headers
+    def _default_headers(self) -> Dict[str, str]:
+        return _default_headers_for_config(self._config)
 
     def _request(
         self,
@@ -85,6 +95,20 @@ class SyncHttpClient:
                 if key.lower() != "content-type"
             }
 
+        multipart_content: Optional[bytes] = None
+        if files and allow_retry:
+            prepared_request = self._client.build_request(
+                method=method,
+                url=endpoint,
+                params=_clean_params(params),
+                data=data,
+                files=files,
+                headers=request_headers if request_headers else None,
+            )
+            multipart_content = prepared_request.read()
+            request_headers["Content-Type"] = prepared_request.headers["Content-Type"]
+            request_headers["Content-Length"] = str(len(multipart_content))
+
         last_exception: Optional[Exception] = None
         retry_count = 0
 
@@ -94,23 +118,23 @@ class SyncHttpClient:
                     method=method,
                     url=endpoint,
                     params=_clean_params(params),
-                    json=json,
-                    data=data,
-                    files=files,
+                    json=json if multipart_content is None else None,
+                    data=data if multipart_content is None else None,
+                    files=files if multipart_content is None else None,
+                    content=multipart_content,
                     headers=request_headers if request_headers else None,
                 )
 
                 if response.status_code == 429:
-                    retry_after = _get_retry_after(response)
+                    retry_after = _get_retry_after(
+                        response,
+                        max_delay=self._config.max_retry_delay,
+                    )
                     if allow_retry and retry_count < self._config.max_retries:
                         time.sleep(retry_after)
                         retry_count += 1
                         continue
-                    raise RateLimitError(
-                        "Rate limit exceeded",
-                        status_code=429,
-                        retry_after=retry_after,
-                    )
+                    _raise_rate_limit_response(response, retry_after=retry_after)
 
                 if (
                     allow_retry
@@ -118,26 +142,23 @@ class SyncHttpClient:
                     and retry_count < self._config.max_retries
                 ):
                     retry_count += 1
-                    time.sleep(2 ** retry_count)
+                    time.sleep(min(2**retry_count, self._config.max_retry_delay))
                     continue
 
                 if response.status_code >= 400:
-                    try:
-                        body = response.json()
-                    except Exception:
-                        body = {"message": response.text}
+                    body = _decode_error_body(response)
                     _raise_for_status(response.status_code, body)
 
                 if response.status_code == 204:
                     return {}
 
-                return response.json()
+                return _decode_json_response(response)
 
             except httpx.TimeoutException as e:
                 last_exception = TimeoutError(f"Request timed out: {e}")
                 if allow_retry and retry_count < self._config.max_retries:
                     retry_count += 1
-                    time.sleep(2 ** retry_count)
+                    time.sleep(min(2**retry_count, self._config.max_retry_delay))
                     continue
                 raise last_exception
 
@@ -145,7 +166,7 @@ class SyncHttpClient:
                 last_exception = ConnectionError(f"Connection failed: {e}")
                 if allow_retry and retry_count < self._config.max_retries:
                     retry_count += 1
-                    time.sleep(2 ** retry_count)
+                    time.sleep(min(2**retry_count, self._config.max_retry_delay))
                     continue
                 raise last_exception
 
@@ -156,7 +177,7 @@ class SyncHttpClient:
                 last_exception = VideoVectorError(f"Request failed: {e}")
                 if allow_retry and retry_count < self._config.max_retries:
                     retry_count += 1
-                    time.sleep(2 ** retry_count)
+                    time.sleep(min(2**retry_count, self._config.max_retry_delay))
                     continue
                 raise last_exception
 
@@ -173,6 +194,66 @@ class SyncHttpClient:
     ) -> Any:
         """Execute GET request."""
         return self._request("GET", endpoint, params=params, headers=headers)
+
+    def iter_bytes(
+        self,
+        endpoint: str,
+        *,
+        headers: Optional[Dict[str, str]] = None,
+        chunk_size: int = 1024 * 1024,
+        max_bytes: int,
+    ) -> Iterator[bytes]:
+        """Stream a response body exactly once without JSON decoding or retries."""
+        _validate_stream_limits(chunk_size=chunk_size, max_bytes=max_bytes)
+        stream_headers = _identity_encoded_download_headers(headers)
+
+        try:
+            with self._client.stream(
+                method="GET",
+                url=endpoint,
+                headers=stream_headers,
+            ) as response:
+                if response.status_code != 200:
+                    response.read()
+                    if response.status_code < 400:
+                        raise VideoVectorError(
+                            "Download did not return a complete response",
+                            status_code=response.status_code,
+                            error_code="unexpected_download_status",
+                        )
+                    _raise_stream_error(
+                        response,
+                        max_retry_delay=self._config.max_retry_delay,
+                    )
+                expected_length = _validate_download_response_headers(
+                    response,
+                    max_bytes=max_bytes,
+                )
+
+                total = 0
+                for chunk in response.iter_bytes(chunk_size=chunk_size):
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise VideoVectorError(
+                            "Download exceeded the configured byte limit",
+                            error_code="download_size_limit_exceeded",
+                            details={"max_bytes": max_bytes},
+                        )
+                    yield chunk
+                _validate_streamed_length(
+                    expected_length=expected_length,
+                    actual_length=total,
+                )
+        except httpx.TimeoutException as exc:
+            raise TimeoutError(f"Download timed out: {exc}") from exc
+        except httpx.ConnectError as exc:
+            raise ConnectionError(f"Download connection failed: {exc}") from exc
+        except (RateLimitError, VideoVectorError):
+            raise
+        except httpx.HTTPError as exc:
+            raise ConnectionError(f"Download failed: {exc}") from exc
 
     def post(
         self,
@@ -257,27 +338,13 @@ class AsyncHttpClient:
         self._config = config
         self._client: Optional[httpx.AsyncClient] = None
 
-    def _default_headers(self) -> Dict[str, str]:
-        headers = {
-            "Accept": "application/json",
-            "User-Agent": f"videovector-python/{__version__}",
-        }
-        if self._config.auth_mode == "bearer" and self._config.bearer_token:
-            headers["Authorization"] = f"Bearer {self._config.bearer_token}"
-        elif self._config.auth_mode == "api_key" and self._config.api_key:
-            headers["X-API-Key"] = self._config.api_key
-        elif self._config.bearer_token:
-            headers["Authorization"] = f"Bearer {self._config.bearer_token}"
-        elif self._config.api_key:
-            headers["X-API-Key"] = self._config.api_key
+    @property
+    def base_url(self) -> str:
+        """Configured API base URL used to validate security-sensitive responses."""
+        return self._config.base_url
 
-        custom_headers = {
-            key: value
-            for key, value in self._config.custom_headers.items()
-            if key.lower() != "content-type"
-        }
-        headers.update(custom_headers)
-        return headers
+    def _default_headers(self) -> Dict[str, str]:
+        return _default_headers_for_config(self._config)
 
     async def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -301,8 +368,6 @@ class AsyncHttpClient:
         idempotency_key: Optional[str] = None,
     ) -> Any:
         """Execute HTTP request with retry logic."""
-        import asyncio
-
         normalized_method = method.upper()
         allow_retry = _should_retry_request(normalized_method, idempotency_key)
 
@@ -321,6 +386,20 @@ class AsyncHttpClient:
                 if key.lower() != "content-type"
             }
 
+        multipart_content: Optional[bytes] = None
+        if files and allow_retry:
+            prepared_request = client.build_request(
+                method=method,
+                url=endpoint,
+                params=_clean_params(params),
+                data=data,
+                files=files,
+                headers=request_headers if request_headers else None,
+            )
+            multipart_content = await prepared_request.aread()
+            request_headers["Content-Type"] = prepared_request.headers["Content-Type"]
+            request_headers["Content-Length"] = str(len(multipart_content))
+
         last_exception: Optional[Exception] = None
         retry_count = 0
 
@@ -330,23 +409,23 @@ class AsyncHttpClient:
                     method=method,
                     url=endpoint,
                     params=_clean_params(params),
-                    json=json,
-                    data=data,
-                    files=files,
+                    json=json if multipart_content is None else None,
+                    data=data if multipart_content is None else None,
+                    files=files if multipart_content is None else None,
+                    content=multipart_content,
                     headers=request_headers if request_headers else None,
                 )
 
                 if response.status_code == 429:
-                    retry_after = _get_retry_after(response)
+                    retry_after = _get_retry_after(
+                        response,
+                        max_delay=self._config.max_retry_delay,
+                    )
                     if allow_retry and retry_count < self._config.max_retries:
                         await asyncio.sleep(retry_after)
                         retry_count += 1
                         continue
-                    raise RateLimitError(
-                        "Rate limit exceeded",
-                        status_code=429,
-                        retry_after=retry_after,
-                    )
+                    _raise_rate_limit_response(response, retry_after=retry_after)
 
                 if (
                     allow_retry
@@ -354,26 +433,23 @@ class AsyncHttpClient:
                     and retry_count < self._config.max_retries
                 ):
                     retry_count += 1
-                    await asyncio.sleep(2 ** retry_count)
+                    await asyncio.sleep(min(2**retry_count, self._config.max_retry_delay))
                     continue
 
                 if response.status_code >= 400:
-                    try:
-                        body = response.json()
-                    except Exception:
-                        body = {"message": response.text}
+                    body = _decode_error_body(response)
                     _raise_for_status(response.status_code, body)
 
                 if response.status_code == 204:
                     return {}
 
-                return response.json()
+                return _decode_json_response(response)
 
             except httpx.TimeoutException as e:
                 last_exception = TimeoutError(f"Request timed out: {e}")
                 if allow_retry and retry_count < self._config.max_retries:
                     retry_count += 1
-                    await asyncio.sleep(2 ** retry_count)
+                    await asyncio.sleep(min(2**retry_count, self._config.max_retry_delay))
                     continue
                 raise last_exception
 
@@ -381,7 +457,7 @@ class AsyncHttpClient:
                 last_exception = ConnectionError(f"Connection failed: {e}")
                 if allow_retry and retry_count < self._config.max_retries:
                     retry_count += 1
-                    await asyncio.sleep(2 ** retry_count)
+                    await asyncio.sleep(min(2**retry_count, self._config.max_retry_delay))
                     continue
                 raise last_exception
 
@@ -392,7 +468,7 @@ class AsyncHttpClient:
                 last_exception = VideoVectorError(f"Request failed: {e}")
                 if allow_retry and retry_count < self._config.max_retries:
                     retry_count += 1
-                    await asyncio.sleep(2 ** retry_count)
+                    await asyncio.sleep(min(2**retry_count, self._config.max_retry_delay))
                     continue
                 raise last_exception
 
@@ -409,6 +485,67 @@ class AsyncHttpClient:
     ) -> Any:
         """Execute GET request."""
         return await self._request("GET", endpoint, params=params, headers=headers)
+
+    async def iter_bytes(
+        self,
+        endpoint: str,
+        *,
+        headers: Optional[Dict[str, str]] = None,
+        chunk_size: int = 1024 * 1024,
+        max_bytes: int,
+    ) -> AsyncIterator[bytes]:
+        """Stream a response body exactly once without JSON decoding or retries."""
+        _validate_stream_limits(chunk_size=chunk_size, max_bytes=max_bytes)
+        client = await self._ensure_client()
+        stream_headers = _identity_encoded_download_headers(headers)
+
+        try:
+            async with client.stream(
+                method="GET",
+                url=endpoint,
+                headers=stream_headers,
+            ) as response:
+                if response.status_code != 200:
+                    await response.aread()
+                    if response.status_code < 400:
+                        raise VideoVectorError(
+                            "Download did not return a complete response",
+                            status_code=response.status_code,
+                            error_code="unexpected_download_status",
+                        )
+                    _raise_stream_error(
+                        response,
+                        max_retry_delay=self._config.max_retry_delay,
+                    )
+                expected_length = _validate_download_response_headers(
+                    response,
+                    max_bytes=max_bytes,
+                )
+
+                total = 0
+                async for chunk in response.aiter_bytes(chunk_size=chunk_size):
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise VideoVectorError(
+                            "Download exceeded the configured byte limit",
+                            error_code="download_size_limit_exceeded",
+                            details={"max_bytes": max_bytes},
+                        )
+                    yield chunk
+                _validate_streamed_length(
+                    expected_length=expected_length,
+                    actual_length=total,
+                )
+        except httpx.TimeoutException as exc:
+            raise TimeoutError(f"Download timed out: {exc}") from exc
+        except httpx.ConnectError as exc:
+            raise ConnectionError(f"Download connection failed: {exc}") from exc
+        except (RateLimitError, VideoVectorError):
+            raise
+        except httpx.HTTPError as exc:
+            raise ConnectionError(f"Download failed: {exc}") from exc
 
     async def post(
         self,
@@ -495,6 +632,162 @@ class AsyncHttpClient:
         await self.close()
 
 
+def _raise_rate_limit_response(response: httpx.Response, *, retry_after: int) -> None:
+    """Preserve the API's structured 429 contract on the typed SDK error."""
+    body = _decode_error_body(response, default_message="Rate limit exceeded")
+
+    try:
+        _raise_for_status(429, body)
+    except RateLimitError as error:
+        error.retry_after = retry_after
+        raise
+
+    # Defensive fallback if the exception mapper ever changes its 429 branch.
+    raise RateLimitError(
+        "Rate limit exceeded",
+        status_code=429,
+        retry_after=retry_after,
+    )
+
+
+def _identity_encoded_download_headers(
+    headers: Optional[Dict[str, str]],
+) -> Dict[str, str]:
+    """Require an undecoded response so Content-Length remains authoritative."""
+    stream_headers = {
+        name: value for name, value in (headers or {}).items() if name.lower() != "accept-encoding"
+    }
+    stream_headers["Accept-Encoding"] = "identity"
+    return stream_headers
+
+
+def _validate_stream_limits(*, chunk_size: int, max_bytes: int) -> None:
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be greater than zero")
+    if max_bytes <= 0:
+        raise ValueError("max_bytes must be greater than zero")
+
+
+def _validate_download_response_headers(
+    response: httpx.Response,
+    *,
+    max_bytes: int,
+) -> int:
+    content_type = response.headers.get("content-type", "")
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    if media_type != "application/json":
+        raise VideoVectorError(
+            "Download returned an unexpected content type",
+            error_code="unexpected_download_content_type",
+            details={"content_type": content_type or None},
+        )
+    content_encoding = response.headers.get("content-encoding", "").strip().lower()
+    if content_encoding not in {"", "identity"}:
+        raise VideoVectorError(
+            "Download returned an unexpected content encoding",
+            error_code="unexpected_download_content_encoding",
+            details={"content_encoding": content_encoding},
+        )
+
+    raw_content_length = response.headers.get("content-length")
+    if raw_content_length is None:
+        raise VideoVectorError(
+            "Download response did not declare its byte length",
+            error_code="missing_download_content_length",
+        )
+    try:
+        content_length = int(raw_content_length)
+    except (TypeError, ValueError) as exc:
+        raise VideoVectorError(
+            "Download returned an invalid Content-Length",
+            error_code="invalid_download_content_length",
+        ) from exc
+    if content_length <= 0:
+        raise VideoVectorError(
+            "Download returned an invalid Content-Length",
+            error_code="invalid_download_content_length",
+        )
+    if content_length > max_bytes:
+        raise VideoVectorError(
+            "Download exceeds the configured byte limit",
+            error_code="download_size_limit_exceeded",
+            details={"content_length": content_length, "max_bytes": max_bytes},
+        )
+    return content_length
+
+
+def _validate_streamed_length(
+    *,
+    expected_length: int,
+    actual_length: int,
+) -> None:
+    if actual_length != expected_length:
+        raise VideoVectorError(
+            "Download body length did not match the declared response length",
+            error_code="download_incomplete",
+            details={
+                "expected_bytes": expected_length,
+                "received_bytes": actual_length,
+            },
+        )
+
+
+def _raise_stream_error(
+    response: httpx.Response,
+    *,
+    max_retry_delay: int,
+) -> None:
+    if response.status_code == 429:
+        _raise_rate_limit_response(
+            response,
+            retry_after=_get_retry_after(response, max_delay=max_retry_delay),
+        )
+    body = _decode_error_body(
+        response,
+        default_message="Download request failed",
+    )
+    _raise_for_status(response.status_code, body)
+
+
+_INVALID_JSON = object()
+
+
+def _try_decode_json(response: httpx.Response) -> Any:
+    """Decode JSON without retaining decoder exceptions or their raw document."""
+    decoded: Any = _INVALID_JSON
+    try:
+        decoded = response.json()
+    except Exception:
+        # JSONDecodeError retains its source document on ``.doc``. Never chain or
+        # re-raise it because successful API responses may contain credentials.
+        pass
+    return decoded
+
+
+def _decode_json_response(response: httpx.Response) -> Any:
+    """Decode a successful API response through a credential-safe boundary."""
+    decoded = _try_decode_json(response)
+    if decoded is _INVALID_JSON:
+        raise VideoVectorError(
+            "API returned an invalid JSON response",
+            status_code=502,
+            error_code="invalid_json_response",
+        ) from None
+    return decoded
+
+
+def _decode_error_body(
+    response: httpx.Response,
+    *,
+    default_message: str = "API request failed",
+) -> Dict[str, Any]:
+    """Return structured errors without copying arbitrary response text."""
+    decoded = _try_decode_json(response)
+    if isinstance(decoded, dict):
+        return decoded
+    return {"message": default_message}
+
+
 def _clean_params(params: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Remove None values from params dict."""
     if params is None:
@@ -502,15 +795,36 @@ def _clean_params(params: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return {k: v for k, v in params.items() if v is not None}
 
 
-def _get_retry_after(response: httpx.Response) -> int:
-    """Extract retry-after value from response headers."""
-    retry_after = response.headers.get("Retry-After")
+def _get_retry_after(
+    response: httpx.Response,
+    *,
+    max_delay: int,
+    now: Optional[datetime] = None,
+) -> int:
+    """Parse Retry-After delay-seconds or HTTP-date and clamp it safely."""
+    retry_after = response.headers.get("Retry-After", "").strip()
+    parsed_delay: Optional[int] = None
     if retry_after:
         try:
-            return int(retry_after)
+            parsed_delay = max(0, int(retry_after))
         except ValueError:
-            pass
-    return 60  # Default to 60 seconds
+            try:
+                retry_at = parsedate_to_datetime(retry_after)
+                if retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(tzinfo=timezone.utc)
+                current = now or datetime.now(timezone.utc)
+                if current.tzinfo is None:
+                    current = current.replace(tzinfo=timezone.utc)
+                parsed_delay = max(
+                    0,
+                    math.ceil((retry_at - current).total_seconds()),
+                )
+            except (TypeError, ValueError, OverflowError):
+                parsed_delay = None
+
+    if parsed_delay is None:
+        parsed_delay = _DEFAULT_RETRY_AFTER_SECONDS
+    return min(parsed_delay, max_delay)
 
 
 def _should_retry_request(method: str, idempotency_key: Optional[str]) -> bool:

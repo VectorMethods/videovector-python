@@ -21,31 +21,43 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
-          cache-dependency-path: pyproject.toml
 
-      - name: Install dependencies
+      - name: Install checksum-pinned package installer
+        run: bash scripts/install_reviewed_uv.sh
+
+      - name: Install hash-locked dependencies
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          set -euo pipefail
+          uv pip install --python "$(command -v python)" --system \
+            --require-hashes --requirements requirements-dev.lock
+          uv pip install --python "$(command -v python)" --system \
+            --no-deps --no-build-isolation --editable .
+          uv pip uninstall --python "$(command -v python)" --system pip
+          if python -m pip --version >/dev/null 2>&1; then
+            echo "pip must not remain installed in the Python 3.9-3.12 CI matrix" >&2
+            exit 1
+          fi
 
       - name: Ruff
-        run: ruff check videovector tests examples
+        run: ruff check videovector tests examples scripts
+
+      - name: Black
+        run: black --check videovector tests examples scripts
 
       - name: MyPy
-        run: mypy videovector
+        run: mypy videovector scripts/release_artifacts.py
 
       - name: Pytest
         run: pytest -q tests
 
       - name: Build artifacts
-        run: python -m build
+        run: python -m build --no-isolation
 
       - name: Twine check
         run: python -m twine check dist/*
@@ -54,16 +66,27 @@ jobs:
     name: Secret scan
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    permissions:
-      contents: read
-      security-events: write
-      pull-requests: read
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
+
+      - name: Scan history and filesystem with checksum-pinned Gitleaks
+        run: |
+          set -euo pipefail
+          mkdir -m 0700 /tmp/gitleaks
+          curl --proto '=https' --tlsv1.2 --retry 3 --retry-all-errors -fsSLo /tmp/gitleaks.tar.gz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz
+          echo '9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c  /tmp/gitleaks.tar.gz' | sha256sum --check -
+          tar --no-same-owner -xzf /tmp/gitleaks.tar.gz -C /tmp/gitleaks gitleaks
+          test -f /tmp/gitleaks/gitleaks
+          test ! -L /tmp/gitleaks/gitleaks
+          echo 'e18325d568268b6efb6cd0cc721f8bea5667f4cd1c8d03618ab61987f41269ad  /tmp/gitleaks/gitleaks' | sha256sum --check -
+          test "$(/tmp/gitleaks/gitleaks version)" = "8.24.3"
+          /tmp/gitleaks/gitleaks git --no-banner --redact --log-opts=--all .
+          /tmp/gitleaks/gitleaks dir --no-banner --redact .
 
       - name: Secret pattern scan
         run: |

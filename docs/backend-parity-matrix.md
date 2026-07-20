@@ -14,21 +14,24 @@ This document maps the Python SDK surface (`videovector`) to backend API endpoin
 
 | SDK Method | HTTP | Endpoint | Response Model | Backend Auth Requirement |
 |---|---|---|---|---|
-| `videos.create` | `POST` | `/videos` | `Video` | `write` |
+| `videos.create` | `POST` | `/videos` | `Video` | `write` (optional `source_connector_id` for a caller-owned private GCS import connector) |
 | `videos.upload` | `POST` | `/videos/upload` | `UploadResult` | `write` |
 | `videos.retrieve` | `GET` | `/videos/{video_id}` | `Video` | `read` |
-| `videos.delete` | `DELETE` | `/videos/{video_id}` | `DeleteResponse` | `admin` |
+| `videos.delete` | `DELETE` | `/videos/{video_id}` | `VideoDeletionResponse` | `admin` |
+| `videos.get_deletion` | `GET` | `/videos/{video_id}/deletion` | `VideoDeletionResponse` | `admin` |
 | `videos.process` | `POST` | `/videos/{video_id}/process` | `ProcessingStartedResponse` | `write` |
 | `videos.list_segments` | `GET` | `/videos/{video_id}/segments` | `SyncPage[Segment]`/`AsyncPage[Segment]` | `read` |
 | `videos.batch_retrieve` | `POST` | `/videos/batch` | `List[VideoWithDetails]` | `read` |
 | `videos.batch_status` | `POST` | `/videos/batch/status` | `List[VideoStatus]` | `read` |
 | `videos.batch_segments` | `POST` | `/videos/batch/segments` | `List[VideoSegments]` | `read` |
-| `videos.get_signed_url` | `POST` | `/videos/signed-url` | `SignedUrl` | `read` |
+| `videos.batch_segments_for_targets` | `POST` | `/videos/batch/segments` | `List[VideoSegments]` with resolved `run_id` | `read` |
+| `videos.get_signed_url(..., force_refresh=False)` | `POST` | `/videos/signed-url` | `SignedUrl` | `read` |
 | `videos.list_prompt_runs` | `GET` | `/videos/{video_id}/prompt-runs` | `List[PromptRun]` | `read` |
 | `indexes.create` | `POST` | `/indexes` | `Index` | `write` |
 | `indexes.retrieve` | `GET` | `/indexes/{index_id}` | `Index` | `search` |
 | `indexes.list` | `GET` | `/indexes` | `List[Index]` | `search` |
-| `indexes.delete` | `DELETE` | `/indexes/{index_id}` | `DeleteResponse` | `admin` |
+| `indexes.delete` | `DELETE` | `/indexes/{index_id}` | `IndexDeletionResponse` | `admin` |
+| `indexes.get_deletion` | `GET` | `/indexes/{index_id}/deletion` | `IndexDeletionResponse` | `admin` |
 | `indexes.list_videos` | `GET` | `/indexes/{index_id}/videos` | `SyncPage[Video]`/`AsyncPage[Video]` | `read` |
 | `indexes.list_prompt_runs` | `GET` | `/indexes/{index_id}/prompt-runs` | `SyncPage[PromptRun]`/`AsyncPage[PromptRun]` | `read` |
 | `prompts.create` | `POST` | `/prompts` | `Prompt` | `write` |
@@ -71,6 +74,8 @@ This document maps the Python SDK surface (`videovector`) to backend API endpoin
 | `exports.create_prompt_run_export` | `POST` | `/exports/prompt-run/{run_id}` | `ExportCreateResult` | `write` |
 | `exports.retrieve` | `GET` | `/exports/{export_id}` | `Export` | `read` |
 | `exports.list` | `GET` | `/exports` | `List[Export]` | `read` |
+| `exports.download_url` | `POST` | `/exports/{export_id}/download-url` | validated `Optional[str]` bearer capability | `read` |
+| `exports.iter_download` / `exports.download` | `GET` | `/exports/{export_id}/download` | bounded byte stream | `read` |
 | `webhooks.create` | `POST` | `/webhooks` | `WebhookWithSecret` | `write` |
 | `webhooks.retrieve` | `GET` | `/webhooks/{webhook_id}` | `Webhook` | `read` |
 | `webhooks.list` | `GET` | `/webhooks` | `List[Webhook]` | `read` |
@@ -119,3 +124,10 @@ The following backend surfaces are intentionally out of scope for this SDK relea
 
 - Endpoint auth requirements are enforced by backend middleware and should be treated as authoritative.
 - Some endpoints are authenticated via either API key or JWT bearer, while `/api-keys/*` requires JWT bearer specifically.
+- The public `admin` API-key scope means full access within the owning account; it never grants platform-administrator access.
+- Omitting `source_connector_id` from `videos.create` preserves the original wire payload and remains the correct call for public GCS objects and server-managed uploads/imports.
+- Batch segment requests use either legacy `video_ids` or run-scoped `targets`,
+  never both. `force_refresh=True` is an explicit recovery path for an
+  exhausted bounded media grant and is not sent by default.
+- GCS connector credential uploads are limited to 64 KiB and encoded once so
+  an idempotent retry sends the identical multipart body.

@@ -15,6 +15,40 @@ from .._types import CloudFile, Connector, DeleteResponse, TestConnectionResult
 if TYPE_CHECKING:
     from .._http import AsyncHttpClient, SyncHttpClient
 
+_MAX_GCS_CREDENTIAL_BYTES = 64 * 1024
+
+
+def _snapshot_gcs_credentials(
+    credentials_file: Union[str, Path, BinaryIO],
+) -> tuple[str, bytes, str]:
+    """Read credential material exactly once into a bounded immutable payload."""
+    if isinstance(credentials_file, (str, Path)):
+        path = Path(credentials_file)
+        filename = path.name
+        with path.open("rb") as source:
+            payload = source.read(_MAX_GCS_CREDENTIAL_BYTES + 1)
+    else:
+        filename = str(getattr(credentials_file, "name", "credentials.json"))
+        original_position: Optional[int] = None
+        try:
+            original_position = credentials_file.tell()
+        except (AttributeError, OSError):
+            pass
+        payload = credentials_file.read(_MAX_GCS_CREDENTIAL_BYTES + 1)
+        if original_position is not None:
+            try:
+                credentials_file.seek(original_position)
+            except (AttributeError, OSError):
+                pass
+
+    if not isinstance(payload, bytes):
+        raise TypeError("credentials_file must be opened in binary mode")
+    if not payload:
+        raise ValueError("credentials_file must not be empty")
+    if len(payload) > _MAX_GCS_CREDENTIAL_BYTES:
+        raise ValueError("credentials_file cannot exceed 64 KiB")
+    return (filename, payload, "application/json")
+
 
 def _resolve_connector_idempotency_key(
     provider: str,
@@ -101,6 +135,7 @@ class ConnectorsResource:
         scopes: Optional[List[str]] = None,
         export_base_path: Optional[str] = None,
         import_mode: str = "all",
+        idempotency_key: Optional[str] = None,
     ) -> Connector:
         """
         Create a Google Cloud Storage connector.
@@ -118,37 +153,27 @@ class ConnectorsResource:
             ValidationError: If parameters are invalid
             ExternalServiceError: If GCS connection fails
         """
-        if isinstance(credentials_file, (str, Path)):
-            file_path = Path(credentials_file)
-            with open(file_path, "rb") as f:
-                files: dict[str, tuple[str, Any, str]] = {
-                    "credentials_file": (file_path.name, f, "application/json")
-                }
-                data: dict[str, Any] = {
-                    "name": name,
-                    "bucket": bucket,
-                    "gcp_project_id": gcp_project_id,
-                    "scopes": scopes or ["import"],
-                    "import_mode": import_mode,
-                }
-                if export_base_path:
-                    data["export_base_path"] = export_base_path
-                response = self._client.post("/connectors/gcs", files=files, data=data)
-        else:
-            filename = getattr(credentials_file, "name", "credentials.json")
-            files_payload: dict[str, tuple[str, Any, str]] = {
-                "credentials_file": (filename, credentials_file, "application/json")
-            }
-            data_payload: dict[str, Any] = {
-                "name": name,
-                "bucket": bucket,
-                "gcp_project_id": gcp_project_id,
-                "scopes": scopes or ["import"],
-                "import_mode": import_mode,
-            }
-            if export_base_path:
-                data_payload["export_base_path"] = export_base_path
-            response = self._client.post("/connectors/gcs", files=files_payload, data=data_payload)
+        files: dict[str, tuple[str, bytes, str]] = {
+            "credentials_file": _snapshot_gcs_credentials(credentials_file)
+        }
+        data: dict[str, Any] = {
+            "name": name,
+            "bucket": bucket,
+            "gcp_project_id": gcp_project_id,
+            "scopes": scopes or ["import"],
+            "import_mode": import_mode,
+        }
+        if export_base_path:
+            data["export_base_path"] = export_base_path
+        response = self._client.post(
+            "/connectors/gcs",
+            files=files,
+            data=data,
+            idempotency_key=_resolve_connector_idempotency_key(
+                "gcs",
+                idempotency_key,
+            ),
+        )
 
         return Connector.model_validate(response)
 
@@ -388,43 +413,30 @@ class AsyncConnectorsResource:
         scopes: Optional[List[str]] = None,
         export_base_path: Optional[str] = None,
         import_mode: str = "all",
+        idempotency_key: Optional[str] = None,
     ) -> Connector:
         """Create a Google Cloud Storage connector."""
-        if isinstance(credentials_file, (str, Path)):
-            file_path = Path(credentials_file)
-            with open(file_path, "rb") as f:
-                files: dict[str, tuple[str, Any, str]] = {
-                    "credentials_file": (file_path.name, f, "application/json")
-                }
-                data: dict[str, Any] = {
-                    "name": name,
-                    "bucket": bucket,
-                    "gcp_project_id": gcp_project_id,
-                    "scopes": scopes or ["import"],
-                    "import_mode": import_mode,
-                }
-                if export_base_path:
-                    data["export_base_path"] = export_base_path
-                response = await self._client.post("/connectors/gcs", files=files, data=data)
-        else:
-            filename = getattr(credentials_file, "name", "credentials.json")
-            files_payload: dict[str, tuple[str, Any, str]] = {
-                "credentials_file": (filename, credentials_file, "application/json")
-            }
-            data_payload: dict[str, Any] = {
-                "name": name,
-                "bucket": bucket,
-                "gcp_project_id": gcp_project_id,
-                "scopes": scopes or ["import"],
-                "import_mode": import_mode,
-            }
-            if export_base_path:
-                data_payload["export_base_path"] = export_base_path
-            response = await self._client.post(
-                "/connectors/gcs",
-                files=files_payload,
-                data=data_payload,
-            )
+        files: dict[str, tuple[str, bytes, str]] = {
+            "credentials_file": _snapshot_gcs_credentials(credentials_file)
+        }
+        data: dict[str, Any] = {
+            "name": name,
+            "bucket": bucket,
+            "gcp_project_id": gcp_project_id,
+            "scopes": scopes or ["import"],
+            "import_mode": import_mode,
+        }
+        if export_base_path:
+            data["export_base_path"] = export_base_path
+        response = await self._client.post(
+            "/connectors/gcs",
+            files=files,
+            data=data,
+            idempotency_key=_resolve_connector_idempotency_key(
+                "gcs",
+                idempotency_key,
+            ),
+        )
 
         return Connector.model_validate(response)
 

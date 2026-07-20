@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, TypedDict, Union
+from urllib.parse import quote
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 # =============================================================================
 # Enums
@@ -61,6 +62,12 @@ class ProcessingModel(str, Enum):
 
 
 class ApiKeyScope(str, Enum):
+    """Tenant API-key scopes.
+
+    ``ADMIN`` grants full access within the owning account only; it never grants
+    VideoVector platform-administrator privileges.
+    """
+
     SEARCH = "search"
     READ = "read"
     WRITE = "write"
@@ -290,7 +297,9 @@ class Prompt(BaseModel):
     prompt_text: str
     json_schema: Dict[str, Any]
     video_level: Optional[PromptVideoLevelConfig] = None
-    semantic_indexing: PromptSemanticIndexingConfig = Field(default_factory=PromptSemanticIndexingConfig)
+    semantic_indexing: PromptSemanticIndexingConfig = Field(
+        default_factory=PromptSemanticIndexingConfig
+    )
     is_active: bool = True
     created_at: str
 
@@ -356,11 +365,26 @@ class PromptRun(BaseModel):
 class SegmentRunResult(BaseModel):
     """Segment-level result from a prompt run."""
 
+    result_type: Literal["segment"] = "segment"
+    result_id: Optional[str] = None
     segment_id: str
     video_id: Optional[str] = None
     run_id: str
     prompt_id: str
+    prompt_run_id: Optional[str] = None
+    video_name: Optional[str] = None
+    source_index_id: Optional[str] = None
     executed_at: str
+    start_time: Optional[float] = None
+    end_time: Optional[float] = None
+    segment_uri: Optional[str] = None
+    gcs_uri: Optional[str] = None
+    thumbnail_uri: Optional[str] = None
+    thumbnail_gcs_uri: Optional[str] = None
+    gif_uri: Optional[str] = None
+    gif_gcs_uri: Optional[str] = None
+    thumbnail_available: bool = False
+    gif_available: bool = False
     metadata: Dict[str, Any]
     metadata_text: str
     processing_warning: Optional[str] = None
@@ -371,15 +395,22 @@ class SegmentRunResult(BaseModel):
     field_extraction_error: Optional[str] = None
     transcription_error: Optional[str] = None
     image_embedding_error: Optional[str] = None
+    marker: MarkerInfo = Field(default_factory=MarkerInfo)
+    extracted_metadata_markers: Dict[str, MarkerInfo] = Field(default_factory=dict)
     metadata_markers: Dict[str, MarkerInfo] = Field(default_factory=dict)
 
 
 class PromptRunVideoResult(BaseModel):
     """Video/audio-level synthesis result for a single media item in a run."""
 
+    result_type: Literal["video"] = "video"
+    result_id: Optional[str] = None
     run_id: str
     prompt_id: str
+    prompt_run_id: Optional[str] = None
     video_id: str
+    video_name: Optional[str] = None
+    source_index_id: Optional[str] = None
     executed_at: str
     status: str
     metadata: Dict[str, Any]
@@ -398,6 +429,21 @@ class PromptRunVideoResult(BaseModel):
     error_message: Optional[str] = None
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
+    segment_uri: Optional[str] = None
+    gcs_uri: Optional[str] = None
+    thumbnail_uri: Optional[str] = None
+    thumbnail_gcs_uri: Optional[str] = None
+    gif_uri: Optional[str] = None
+    gif_gcs_uri: Optional[str] = None
+    thumbnail_available: bool = False
+    gif_available: bool = False
+    preview_segment_id: Optional[str] = None
+    preview_start_time: Optional[float] = None
+    preview_end_time: Optional[float] = None
+    preview_segment_uri: Optional[str] = None
+    preview_thumbnail_uri: Optional[str] = None
+    preview_gif_uri: Optional[str] = None
+    marker: MarkerInfo = Field(default_factory=MarkerInfo)
 
 
 class PromptRunFailureOperationCounts(BaseModel):
@@ -529,25 +575,42 @@ class SearchResult(BaseModel):
     result_id: str
     video_id: str
     video_uri: Optional[str] = None
+    video_name: Optional[str] = None
     segment_id: Optional[str] = None
     start_time: Optional[float] = None
     end_time: Optional[float] = None
+    preview_segment_id: Optional[str] = None
+    preview_start_time: Optional[float] = None
+    preview_end_time: Optional[float] = None
+    preview_segment_uri: Optional[str] = None
+    preview_thumbnail_uri: Optional[str] = None
+    preview_gif_uri: Optional[str] = None
     text_content: str
     content_preview: str = ""
-    similarity_score: float
+    metadata_text: Optional[str] = None
+    similarity_score: Optional[float] = None
+    reranked_score: Optional[float] = None
     segment_uri: Optional[str] = None
+    gcs_uri: Optional[str] = None
+    thumbnail_gcs_uri: Optional[str] = None
+    gif_gcs_uri: Optional[str] = None
     thumbnail_uri: Optional[str] = None
     thumbnail_data: Optional[str] = None
     thumbnail_available: bool = False
     gif_uri: Optional[str] = None
     gif_data: Optional[str] = None
     gif_available: bool = False
+    media_type: Optional[Literal["video", "audio", "image"]] = None
+    metadata: Optional[Dict[str, Any]] = None
     extracted_metadata: Optional[Dict[str, Any]] = None
     field_scores: Optional[Dict[str, float]] = None
     field_instance_scores: Optional[Dict[str, float]] = None
     matched_field_paths: Optional[List[str]] = None
     matched_field_instances: Optional[List[MatchedFieldInstance]] = None
     run_id: Optional[str] = None
+    source_run_id: Optional[str] = None
+    prompt_run_id: Optional[str] = None
+    raw_llm_response: Optional[str] = None
     source_index_id: Optional[str] = None
     marker: MarkerInfo = Field(default_factory=MarkerInfo)
     extracted_metadata_markers: Dict[str, MarkerInfo] = Field(default_factory=dict)
@@ -557,6 +620,7 @@ class ImageSearchResult(SearchResult):
     """Image similarity search result."""
 
     matched_image_uri: Optional[str] = None
+    matched_image_gcs_uri: Optional[str] = None
     matched_image_timestamp: Optional[float] = None
     matched_image_score: Optional[float] = None
     shot_timestamp: Optional[float] = None
@@ -572,8 +636,10 @@ class MultimodalSearchResult(SearchResult):
     image_rank: Optional[int] = None
     match_type: str  # "both", "text_only", "image_only"
     matched_image_uri: Optional[str] = None
+    matched_image_gcs_uri: Optional[str] = None
     matched_image_timestamp: Optional[float] = None
     matched_image_score: Optional[float] = None
+    shot_timestamp: Optional[float] = None
 
 
 class Webhook(BaseModel):
@@ -737,7 +803,9 @@ class TestConnectionResult(BaseModel):
 
 
 class Export(BaseModel):
-    """Metadata export job representation."""
+    """Metadata export job representation returned by authenticated status APIs."""
+
+    model_config = ConfigDict(hide_input_in_errors=True)
 
     export_id: str
     user_id: Optional[str] = None
@@ -746,15 +814,62 @@ class Export(BaseModel):
     status: str
     created_at: Optional[str] = None
     gcs_uri: Optional[str] = None
-    download_url: Optional[str] = None
+    download_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "Authenticated first-party download endpoint for a completed direct "
+            "export. This status field is not a bearer URL."
+        ),
+    )
     file_size_bytes: Optional[int] = None
     error_message: Optional[str] = None
     export_params: Optional[Dict[str, Any]] = None
-    destination_type: Optional[str] = None
+    queue_status: Optional[str] = None
+    attempts: int = 0
+    max_attempts: int = 1
+    available_at: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    last_error: Optional[str] = None
+    destination_type: Optional[Literal["download", "connector"]] = None
     destination_connector_id: Optional[str] = None
     destination_base_path: Optional[str] = None
     destination_subpath: Optional[str] = None
     destination_uri: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_delivery_contract(self) -> "Export":
+        """Keep status responses separate from explicit bearer capabilities."""
+        export_id = self.export_id.strip()
+        if not export_id or export_id != self.export_id:
+            raise ValueError("export_id must be canonical and non-empty")
+
+        connector_id = self.destination_connector_id
+        if self.destination_type == "connector":
+            if (
+                connector_id is None
+                or not connector_id.strip()
+                or connector_id != connector_id.strip()
+            ):
+                raise ValueError("connector delivery requires a canonical connector ID")
+            if self.download_url is not None:
+                raise ValueError("connector delivery cannot include a download endpoint")
+        elif self.destination_type == "download":
+            if connector_id is not None:
+                raise ValueError("direct download cannot identify a connector destination")
+        elif connector_id is not None or self.download_url is not None:
+            raise ValueError("delivery metadata requires an explicit destination type")
+
+        if self.download_url is not None:
+            expected_path = f"/api/v2/exports/{quote(export_id, safe='')}/download"
+            if self.download_url != expected_path:
+                raise ValueError("download_url must be the canonical authenticated export endpoint")
+            if self.status != ExportStatus.COMPLETED.value:
+                raise ValueError("only a completed export can include a download endpoint")
+            if self.queue_status != "succeeded":
+                raise ValueError("only a durably succeeded export can include a download endpoint")
+        return self
 
 
 class ExportCreateResult(BaseModel):
@@ -762,6 +877,49 @@ class ExportCreateResult(BaseModel):
 
     export_id: str
     status: str
+
+
+class ExportDownloadUrlResult(BaseModel):
+    """Result of explicitly minting a bounded export bearer URL."""
+
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    export_id: str
+    status: ExportStatus
+    destination_type: Literal["download", "connector"]
+    destination_connector_id: Optional[str] = None
+    download_url: Optional[SecretStr] = Field(
+        default=None,
+        repr=False,
+        description=(
+            "Short-lived bounded bearer URL, or None when the owned export is "
+            "not available for direct download."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_delivery_contract(self) -> "ExportDownloadUrlResult":
+        if not self.export_id.strip() or self.export_id != self.export_id.strip():
+            raise ValueError("export_id must be canonical and non-empty")
+        if self.destination_type == "connector":
+            connector_id = self.destination_connector_id
+            if (
+                connector_id is None
+                or not connector_id.strip()
+                or connector_id != connector_id.strip()
+            ):
+                raise ValueError("connector delivery requires a canonical connector ID")
+            if self.download_url is not None:
+                raise ValueError("connector delivery cannot include a bearer URL")
+        elif self.destination_connector_id is not None:
+            raise ValueError("direct download cannot include destination_connector_id")
+        if self.download_url is not None:
+            raw_download_url = self.download_url.get_secret_value()
+            if not raw_download_url.strip() or raw_download_url != raw_download_url.strip():
+                raise ValueError("download_url must not be empty")
+            if self.status != ExportStatus.COMPLETED:
+                raise ValueError("only a completed export can include a bearer URL")
+        return self
 
 
 # =============================================================================
@@ -843,6 +1001,24 @@ class DeleteResponse(BaseModel):
     """Response for delete operations."""
 
     message: str
+
+
+class IndexDeletionResponse(BaseModel):
+    """Durable lifecycle returned when an index deletion is accepted."""
+
+    index_id: str
+    deletion_id: str
+    status: Literal["draining", "deleting", "deleted"]
+    retry_after_seconds: Optional[int] = Field(default=None, ge=1)
+
+
+class VideoDeletionResponse(BaseModel):
+    """Durable lifecycle returned when a video deletion is accepted."""
+
+    video_id: str
+    deletion_id: str
+    status: Literal["draining", "deleting", "deleted"]
+    retry_after_seconds: Optional[int] = Field(default=None, ge=1)
 
 
 class ProcessingStartedResponse(BaseModel):
@@ -1069,8 +1245,18 @@ class VideoStatus(BaseModel):
     processing_status: Optional[List[PromptRunProcessingStatus]] = None
 
 
+class BatchVideoSegmentsTarget(BaseModel):
+    """Run-scoped media target for batch segment retrieval."""
+
+    model_config = ConfigDict(frozen=True)
+
+    video_id: str
+    run_id: Optional[str] = None
+
+
 class VideoSegments(BaseModel):
     """Video with its segments for batch operations."""
 
     video_id: str
+    run_id: Optional[str] = None
     segments: List[Segment]

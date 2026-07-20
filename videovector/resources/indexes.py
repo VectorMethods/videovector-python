@@ -15,7 +15,7 @@ from .._pagination import (
     _parse_paginated_response,
     _parse_paginated_response_async,
 )
-from .._types import DeleteResponse, Index, PromptRun, Video
+from .._types import Index, IndexDeletionResponse, PromptRun, Video
 
 if TYPE_CHECKING:
     from .._http import AsyncHttpClient, SyncHttpClient
@@ -104,22 +104,28 @@ class IndexesResource:
         )
         return [Index.model_validate(idx) for idx in response]
 
-    def delete(self, index_id: str) -> DeleteResponse:
+    def delete(self, index_id: str) -> IndexDeletionResponse:
         """
-        Delete an index.
+        Start or resume durable index deletion.
 
         Args:
             index_id: Index ID to delete
 
         Returns:
-            DeleteResponse: Confirmation message
+            IndexDeletionResponse: Durable deletion identity and progress
 
         Raises:
             NotFoundError: If index doesn't exist
             AuthorizationError: If admin scope is required
         """
         response = self._client.delete(f"/indexes/{index_id}")
-        return DeleteResponse.model_validate(response)
+        return IndexDeletionResponse.model_validate(response)
+
+    def get_deletion(self, index_id: str) -> IndexDeletionResponse:
+        """Retrieve durable deletion progress for an index."""
+
+        response = self._client.get(f"/indexes/{index_id}/deletion")
+        return IndexDeletionResponse.model_validate(response)
 
     def list_videos(
         self,
@@ -224,10 +230,16 @@ class AsyncIndexesResource:
         )
         return [Index.model_validate(idx) for idx in response]
 
-    async def delete(self, index_id: str) -> DeleteResponse:
-        """Delete an index."""
+    async def delete(self, index_id: str) -> IndexDeletionResponse:
+        """Start or resume durable index deletion."""
         response = await self._client.delete(f"/indexes/{index_id}")
-        return DeleteResponse.model_validate(response)
+        return IndexDeletionResponse.model_validate(response)
+
+    async def get_deletion(self, index_id: str) -> IndexDeletionResponse:
+        """Retrieve durable deletion progress for an index."""
+
+        response = await self._client.get(f"/indexes/{index_id}/deletion")
+        return IndexDeletionResponse.model_validate(response)
 
     async def list_videos(
         self,

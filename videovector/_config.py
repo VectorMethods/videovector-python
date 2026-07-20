@@ -15,6 +15,23 @@ AuthMode = Literal["api_key", "bearer"]
 DEFAULT_BASE_URL = "https://api.vectormethods.com/api/v2"
 DEFAULT_TIMEOUT = 60.0
 DEFAULT_MAX_RETRIES = 3
+DEFAULT_MAX_RETRY_DELAY = 300
+RESERVED_CUSTOM_HEADERS = frozenset(
+    {
+        "accept",
+        "authorization",
+        "content-length",
+        "content-type",
+        "cookie",
+        "host",
+        "idempotency-key",
+        "set-cookie",
+        "transfer-encoding",
+        "user-agent",
+        "x-api-key",
+        "x-idempotency-key",
+    }
+)
 
 
 @dataclass
@@ -26,6 +43,7 @@ class ClientConfig:
     base_url: str = DEFAULT_BASE_URL
     timeout: float = DEFAULT_TIMEOUT
     max_retries: int = DEFAULT_MAX_RETRIES
+    max_retry_delay: int = DEFAULT_MAX_RETRY_DELAY
     custom_headers: dict[str, str] = field(default_factory=dict)
     auth_mode: Optional[AuthMode] = None
 
@@ -42,18 +60,25 @@ class ClientConfig:
         if self.auth_mode is None:
             if self.api_key and self.bearer_token:
                 raise ValueError(
-                    "Provide only one authentication method. "
-                    "Set either api_key or bearer_token."
+                    "Provide only one authentication method; set either api_key or bearer_token."
                 )
             if not self.api_key and not self.bearer_token:
-                raise ValueError(
-                    "Authentication is required. Provide api_key or bearer_token."
-                )
+                raise ValueError("Authentication is required. Provide api_key or bearer_token.")
 
         if self.timeout <= 0:
             raise ValueError("timeout must be greater than 0.")
         if self.max_retries < 0:
             raise ValueError("max_retries must be >= 0.")
+        if self.max_retry_delay <= 0:
+            raise ValueError("max_retry_delay must be greater than 0.")
+
+        reserved = sorted(
+            name for name in self.custom_headers if name.strip().lower() in RESERVED_CUSTOM_HEADERS
+        )
+        if reserved:
+            raise ValueError(
+                "custom_headers cannot override reserved headers: " + ", ".join(reserved)
+            )
 
     @classmethod
     def from_env(
@@ -63,6 +88,7 @@ class ClientConfig:
         base_url: Optional[str] = None,
         timeout: Optional[float] = None,
         max_retries: Optional[int] = None,
+        max_retry_delay: Optional[int] = None,
         auth_mode: Optional[AuthMode] = None,
         custom_headers: Optional[dict[str, str]] = None,
     ) -> "ClientConfig":
@@ -75,10 +101,21 @@ class ClientConfig:
             VIDEO_VECTOR_BASE_URL: Base URL for API (default: DEFAULT_BASE_URL)
             VIDEO_VECTOR_TIMEOUT: Request timeout in seconds (default: 60)
             VIDEO_VECTOR_MAX_RETRIES: Maximum retry attempts (default: 3)
+            VIDEO_VECTOR_MAX_RETRY_DELAY: Maximum retry wait in seconds (default: 300)
         """
-        resolved_api_key = api_key or os.environ.get("VIDEO_VECTOR_API_KEY")
-        resolved_bearer_token = bearer_token or os.environ.get("VIDEO_VECTOR_BEARER_TOKEN")
-        resolved_auth_mode_raw = auth_mode or os.environ.get("VIDEO_VECTOR_AUTH_MODE")
+        explicit_credentials = api_key is not None or bearer_token is not None
+        resolved_auth_mode_raw: Optional[str]
+        if explicit_credentials:
+            # Explicit constructor credentials are one coherent authentication
+            # choice. Do not combine them with an unrelated ambient credential
+            # or auth mode from the process environment.
+            resolved_api_key = api_key
+            resolved_bearer_token = bearer_token
+            resolved_auth_mode_raw = auth_mode
+        else:
+            resolved_api_key = os.environ.get("VIDEO_VECTOR_API_KEY")
+            resolved_bearer_token = os.environ.get("VIDEO_VECTOR_BEARER_TOKEN")
+            resolved_auth_mode_raw = auth_mode or os.environ.get("VIDEO_VECTOR_AUTH_MODE")
         if resolved_auth_mode_raw not in (None, "api_key", "bearer"):
             raise ValueError(
                 "VIDEO_VECTOR_AUTH_MODE must be either 'api_key' or 'bearer' when set."
@@ -87,11 +124,7 @@ class ClientConfig:
             cast(AuthMode, resolved_auth_mode_raw) if resolved_auth_mode_raw is not None else None
         )
 
-        resolved_base_url = (
-            base_url
-            or os.environ.get("VIDEO_VECTOR_BASE_URL")
-            or DEFAULT_BASE_URL
-        )
+        resolved_base_url = base_url or os.environ.get("VIDEO_VECTOR_BASE_URL") or DEFAULT_BASE_URL
 
         resolved_timeout = timeout
         if resolved_timeout is None:
@@ -103,12 +136,20 @@ class ClientConfig:
             env_retries = os.environ.get("VIDEO_VECTOR_MAX_RETRIES")
             resolved_max_retries = int(env_retries) if env_retries else DEFAULT_MAX_RETRIES
 
+        resolved_max_retry_delay = max_retry_delay
+        if resolved_max_retry_delay is None:
+            env_max_retry_delay = os.environ.get("VIDEO_VECTOR_MAX_RETRY_DELAY")
+            resolved_max_retry_delay = (
+                int(env_max_retry_delay) if env_max_retry_delay else DEFAULT_MAX_RETRY_DELAY
+            )
+
         return cls(
             api_key=resolved_api_key,
             bearer_token=resolved_bearer_token,
             base_url=resolved_base_url.rstrip("/"),
             timeout=resolved_timeout,
             max_retries=resolved_max_retries,
+            max_retry_delay=resolved_max_retry_delay,
             auth_mode=resolved_auth_mode,
             custom_headers=custom_headers or {},
         )

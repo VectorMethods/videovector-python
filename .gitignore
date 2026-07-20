@@ -20,6 +20,7 @@ env/
 ENV/
 build/
 dist/
+release-bundle/
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
@@ -33,4 +34,3 @@ htmlcov/
 .vscode/
 *.swp
 *.swo
-

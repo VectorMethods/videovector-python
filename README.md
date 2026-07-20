@@ -54,6 +54,7 @@ The SDK reads credentials and operational settings from constructor arguments or
 | Base URL | `VIDEO_VECTOR_BASE_URL` | Defaults to `https://api.vectormethods.com/api/v2`. |
 | Timeout | `VIDEO_VECTOR_TIMEOUT` | Seconds; default is `60`. |
 | Retries | `VIDEO_VECTOR_MAX_RETRIES` | Default is `3`. |
+| Maximum retry delay | `VIDEO_VECTOR_MAX_RETRY_DELAY` | Seconds; default is `300`. Applies to exponential backoff and both `Retry-After` formats. |
 
 Explicit constructor arguments override environment values:
 
@@ -65,10 +66,14 @@ client = VideoVector(
     base_url="https://api.vectormethods.com/api/v2",
     timeout=90,
     max_retries=5,
+    max_retry_delay=120,
+    custom_headers={"X-Trace-Context": "request-group-1"},
 )
 ```
 
 Configure one auth mode at a time. If both an API key and bearer token are present, set `auth_mode` or `VIDEO_VECTOR_AUTH_MODE`.
+Custom headers cannot override authentication, content framing, user agent,
+idempotency, or other SDK-owned headers.
 
 ## Resource Overview
 
@@ -79,13 +84,58 @@ Configure one auth mode at a time. If both an API key and bearer token are prese
 - `client.search`: text, image, multimodal, filter, multi-run, and playground search.
 - `client.connectors`: GCS, S3, and Azure connector creation, testing, browsing, and deletion.
 - `client.import_jobs`: bulk import from configured connectors.
-- `client.exports`: index and prompt-run metadata exports.
+- `client.exports`: index and prompt-run metadata exports with bounded authenticated streaming.
 - `client.webhooks`: webhook CRUD, delivery inspection, retries, event discovery, and secret rotation.
 - `client.api_keys`: API key CRUD, rotate, revoke, and delete with bearer auth.
 - `client.usage`: usage metrics, history, details, and breakdowns.
 - `client.rate_limits`: rate-limit status and refresh.
 
 Endpoint-by-endpoint coverage is documented in [docs/backend-parity-matrix.md](docs/backend-parity-matrix.md).
+
+Fetch segments for exact prompt runs without mixing results from a newer run:
+
+```python
+from videovector import BatchVideoSegmentsTarget
+
+responses = client.videos.batch_segments_for_targets(
+    [
+        BatchVideoSegmentsTarget(video_id="video_123", run_id="run_123"),
+        BatchVideoSegmentsTarget(video_id="video_456"),
+    ]
+)
+for response in responses:
+    print(response.video_id, response.run_id, len(response.segments))
+```
+
+`videos.batch_segments(video_ids)` remains available for legacy unscoped
+lookups. If a bounded media grant has been exhausted after a failed load,
+request explicit rotation with
+`videos.get_signed_url(gcs_uri, force_refresh=True)`.
+
+Completed first-party exports can be streamed to disk without buffering the
+file or retrying a partially delivered response:
+
+```python
+export = client.exports.wait_for_completion("export_123")
+client.exports.download(export.export_id, "metadata.json")
+```
+
+Use `iter_download` when your application needs to process chunks directly.
+Connector-delivered exports remain in the configured destination.
+
+Export status models expose an authenticated `/download` endpoint in
+`export.download_url`; that field is not a bearer credential. When a browser or
+another bounded client specifically needs a short-lived bearer URL, mint one
+explicitly and avoid logging or persisting it:
+
+```python
+bounded_url = client.exports.download_url(export.export_id)
+```
+
+The SDK accepts this capability only from the configured HTTPS API origin and
+only when its path, export ID, query shape, and bounded token match the backend
+contract. The returned string is intentionally unwrapped for the caller, so it
+must still be handled like a credential.
 
 ## Pagination
 
@@ -140,6 +190,11 @@ Automatic retries are enabled for:
 - idempotent methods: `GET`, `HEAD`, `OPTIONS`, `PUT`, and `DELETE`
 - any request that includes an explicit `idempotency_key`
 
+The SDK accepts `Retry-After` as either delay-seconds or an HTTP date and
+clamps the wait to `max_retry_delay`. Async waits propagate cancellation
+immediately. Idempotent multipart retries replay one pre-encoded body rather
+than rereading a file object.
+
 For non-idempotent operations, pass an idempotency key when retrying is safe:
 
 ```python
@@ -160,19 +215,23 @@ The [examples](examples) directory contains runnable, environment-driven example
 - video-level synthesis
 - text, image, multimodal, and filter search
 - GCS, S3, and Azure connectors
+- run-scoped batch segment retrieval and bounded playback grants
 - import jobs, exports, webhooks, idempotency, failed-segment recovery, usage, and rate limits
 
 Examples intentionally use placeholders and environment variables. Do not hardcode credentials in application code.
 
 ## Development
 
+Use the reviewed `uv==0.11.29` installer recorded in
+`scripts/install_reviewed_uv.sh`.
+
 ```bash
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
+uv pip install --python "$(command -v python)" --require-hashes -r requirements-dev.lock
+uv pip install --python "$(command -v python)" --no-deps --no-build-isolation -e .
 ruff check videovector tests examples
 mypy videovector
 pytest -q tests
-python -m build
+python -m build --no-isolation
 python -m twine check dist/*
 ```
 

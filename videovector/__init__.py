@@ -68,6 +68,7 @@ Environment Variables:
     VIDEO_VECTOR_BASE_URL: Base URL (default: videovector._config.DEFAULT_BASE_URL)
     VIDEO_VECTOR_TIMEOUT: Request timeout in seconds (default: 60)
     VIDEO_VECTOR_MAX_RETRIES: Max retry attempts (default: 3)
+    VIDEO_VECTOR_MAX_RETRY_DELAY: Max retry wait in seconds (default: 300)
 """
 
 from ._client import AsyncVideoVector, VideoVector
@@ -91,6 +92,7 @@ from ._types import (
     ApiKey,
     ApiKeyScope,
     ApiKeyWithSecret,
+    BatchVideoSegmentsTarget,
     CloudFile,
     Connector,
     ConnectorImportMode,
@@ -101,6 +103,7 @@ from ._types import (
     ExecutePromptTarget,
     Export,
     ExportCreateResult,
+    ExportDownloadUrlResult,
     ExportStatus,
     ExportType,
     FilterCondition,
@@ -110,6 +113,7 @@ from ._types import (
     ImportJobProgress,
     ImportJobStatus,
     Index,
+    IndexDeletionResponse,
     LlmCall,
     MarkerInfo,
     MatchedFieldInstance,
@@ -151,6 +155,7 @@ from ._types import (
     UsageMetricTypeInfo,
     UsageTotals,
     Video,
+    VideoDeletionResponse,
     VideoLevelProcessingStatus,
     VideoSegments,
     VideoStatus,
@@ -192,6 +197,7 @@ __all__ = [
     "VideoWithDetails",
     "VideoStatus",
     "VideoSegments",
+    "BatchVideoSegmentsTarget",
     "Segment",
     "Index",
     "Prompt",
@@ -227,6 +233,7 @@ __all__ = [
     # Types - Exports
     "Export",
     "ExportCreateResult",
+    "ExportDownloadUrlResult",
     # Types - Webhooks
     "Webhook",
     "WebhookWithSecret",
@@ -240,6 +247,8 @@ __all__ = [
     "SignedUrl",
     "UploadResult",
     "DeleteResponse",
+    "IndexDeletionResponse",
+    "VideoDeletionResponse",
     "ProcessingStartedResponse",
     # Types - Prompts
     "PromptListResponse",
