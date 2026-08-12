@@ -24,6 +24,7 @@ from .resources import (
     AsyncUsageResource,
     AsyncVideosResource,
     AsyncWebhooksResource,
+    AsyncWorkflowResource,
     ConnectorsResource,
     ExportsResource,
     ImportJobsResource,
@@ -35,6 +36,7 @@ from .resources import (
     UsageResource,
     VideosResource,
     WebhooksResource,
+    WorkflowResource,
 )
 
 
@@ -104,6 +106,7 @@ class VideoVector:
         exports: Metadata export operations
         webhooks: Webhook configuration
         api_keys: API key management
+        workflow: Simplified upload, prompt definition, processing, and search
     """
 
     videos: VideosResource
@@ -118,6 +121,7 @@ class VideoVector:
     exports: ExportsResource
     webhooks: WebhooksResource
     api_keys: ApiKeysResource
+    workflow: WorkflowResource
 
     def __init__(
         self,
@@ -156,6 +160,7 @@ class VideoVector:
         self.exports = ExportsResource(self._http)
         self.webhooks = WebhooksResource(self._http)
         self.api_keys = ApiKeysResource(self._http)
+        self.workflow = WorkflowResource(self._http)
 
     def close(self) -> None:
         """Close the HTTP client and release resources."""
@@ -226,6 +231,7 @@ class AsyncVideoVector:
         exports: Metadata export operations
         webhooks: Webhook configuration
         api_keys: API key management
+        workflow: Simplified upload, prompt definition, processing, and search
     """
 
     videos: AsyncVideosResource
@@ -240,6 +246,7 @@ class AsyncVideoVector:
     exports: AsyncExportsResource
     webhooks: AsyncWebhooksResource
     api_keys: AsyncApiKeysResource
+    workflow: AsyncWorkflowResource
 
     def __init__(
         self,
@@ -278,6 +285,7 @@ class AsyncVideoVector:
         self.exports = AsyncExportsResource(self._http)
         self.webhooks = AsyncWebhooksResource(self._http)
         self.api_keys = AsyncApiKeysResource(self._http)
+        self.workflow = AsyncWorkflowResource(self._http)
 
     async def close(self) -> None:
         """Close the HTTP client and release resources."""

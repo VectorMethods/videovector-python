@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added the typed synchronous and asynchronous simplified workflow surface for
+  upload, prompt definition, processing, stable search pagination, and
+  searchable-run polling.
+- Changed idempotent multipart request retries to rewind seekable streams rather
+  than buffering an entire media upload in memory. Non-seekable streams are sent
+  once and are not retried.
+- Expanded canonical search-result models so workflow search preserves prompt
+  provenance, multimodal scores, preview media, and matched-image fields.
 - Added typed, resumable index and video deletion contracts. Synchronous and
   asynchronous `delete(...)` calls now return the durable deletion identity
   and status, and `get_deletion(...)` reads progress until `deleted`.

@@ -607,9 +607,21 @@ class SearchResult(BaseModel):
     field_instance_scores: Optional[Dict[str, float]] = None
     matched_field_paths: Optional[List[str]] = None
     matched_field_instances: Optional[List[MatchedFieldInstance]] = None
+    fused_score: Optional[float] = None
+    text_score: Optional[float] = None
+    image_score: Optional[float] = None
+    text_rank: Optional[int] = None
+    image_rank: Optional[int] = None
+    match_type: Optional[str] = None
+    matched_image_uri: Optional[str] = None
+    matched_image_gcs_uri: Optional[str] = None
+    matched_image_timestamp: Optional[float] = None
+    matched_image_score: Optional[float] = None
+    shot_timestamp: Optional[float] = None
     run_id: Optional[str] = None
     source_run_id: Optional[str] = None
     prompt_run_id: Optional[str] = None
+    prompt_id: Optional[str] = None
     raw_llm_response: Optional[str] = None
     source_index_id: Optional[str] = None
     marker: MarkerInfo = Field(default_factory=MarkerInfo)
@@ -750,6 +762,10 @@ class UploadResult(BaseModel):
     status: str
     message: str
     media_type: str = "video"
+    duration_seconds: Optional[float] = None
+    thumbnail_gcs_uri: Optional[str] = None
+    thumbnail_uri: Optional[str] = None
+    thumbnail_available: bool = False
 
 
 # =============================================================================
@@ -1114,6 +1130,81 @@ class FilterSearchResponse(BaseModel):
             normalized["total_shown"] = len(results)
 
         return normalized
+
+
+# =============================================================================
+# Simplified Workflow Response Models
+# =============================================================================
+
+
+class WorkflowDestination(BaseModel):
+    """Resolved upload destination in the simplified workflow."""
+
+    type: Literal["playground", "index"]
+    index_id: Optional[str] = None
+    index_name: Optional[str] = None
+    index_created: bool = False
+
+
+class WorkflowUploadResponse(BaseModel):
+    """Uploaded media plus its resolved consumer destination."""
+
+    video: UploadResult
+    destination: WorkflowDestination
+
+
+class WorkflowPromptDefinition(BaseModel):
+    """Prompt Lab definition returned before or after persistence."""
+
+    name: str
+    description: str
+    prompt_text: str
+    json_schema: Dict[str, Any]
+    video_level: Optional[PromptVideoLevelConfig] = None
+    semantic_indexing: PromptSemanticIndexingConfig = Field(
+        default_factory=PromptSemanticIndexingConfig
+    )
+
+
+class WorkflowDefineResponse(BaseModel):
+    """Generated prompt definition and optional persisted prompt."""
+
+    prompt_id: Optional[str] = None
+    saved: bool
+    definition: WorkflowPromptDefinition
+    prompt: Optional[Prompt] = None
+
+
+class WorkflowProcessResponse(BaseModel):
+    """Prompt and asynchronous run created by simplified processing."""
+
+    prompt: Prompt
+    run: PromptRun
+    status_url: str
+    prompt_created_inline: bool = False
+
+
+class WorkflowPagination(BaseModel):
+    """Bounded stable pagination metadata for simplified search."""
+
+    limit: int
+    count: int = 0
+    has_more: bool = False
+    next_cursor: Optional[str] = None
+    result_window: int = 100
+    truncated: bool = False
+
+
+class WorkflowSearchResponse(BaseModel):
+    """Unified vector or conditional workflow search page."""
+
+    data: List[SearchResult] = Field(default_factory=list)
+    mode: Literal["vector", "condition"]
+    result_level: Literal["segment", "video"] = "segment"
+    scope: Dict[str, Any] = Field(default_factory=dict)
+    coverage: Dict[str, Any] = Field(default_factory=dict)
+    warnings: List[str] = Field(default_factory=list)
+    pagination: WorkflowPagination
 
 
 # =============================================================================

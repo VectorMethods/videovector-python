@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 from typing import Any
 
 import httpx
@@ -16,6 +17,11 @@ from videovector._exceptions import (
     VideoVectorError,
 )
 from videovector._http import AsyncHttpClient, SyncHttpClient
+
+
+class _NonSeekableBytesIO(io.BytesIO):
+    def seekable(self) -> bool:
+        return False
 
 
 def test_sync_http_uses_api_key_header() -> None:
@@ -467,6 +473,76 @@ def test_sync_post_with_idempotency_key_retries(monkeypatch: pytest.MonkeyPatch)
     assert calls["count"] == 3
 
 
+def test_sync_multipart_retry_rewinds_seekable_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bodies: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(request.read())
+        return httpx.Response(500 if len(bodies) == 1 else 201, json={"ok": True})
+
+    cfg = ClientConfig.from_env(
+        api_key="vv_test_api_key",
+        base_url="https://example.test/api/v2",
+        max_retries=1,
+    )
+    client = SyncHttpClient(cfg)
+    client._client.close()
+    client._client = httpx.Client(
+        base_url=cfg.base_url,
+        headers=client._default_headers(),
+        transport=httpx.MockTransport(handler),
+    )
+    monkeypatch.setattr("time.sleep", lambda *_args, **_kwargs: None)
+    stream = io.BytesIO(b"large-video-without-buffering")
+    try:
+        client.post(
+            "/workflow/upload",
+            files={"file": ("demo.mp4", stream)},
+            idempotency_key="upload-1",
+        )
+    finally:
+        client.close()
+
+    assert len(bodies) == 2
+    assert b"large-video-without-buffering" in bodies[0]
+    assert b"large-video-without-buffering" in bodies[1]
+
+
+def test_sync_multipart_does_not_retry_non_seekable_stream() -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(500, json={"message": "retry me"})
+
+    cfg = ClientConfig.from_env(
+        api_key="vv_test_api_key",
+        base_url="https://example.test/api/v2",
+        max_retries=3,
+    )
+    client = SyncHttpClient(cfg)
+    client._client.close()
+    client._client = httpx.Client(
+        base_url=cfg.base_url,
+        headers=client._default_headers(),
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        with pytest.raises(Exception):
+            client.post(
+                "/workflow/upload",
+                files={"file": ("demo.mp4", _NonSeekableBytesIO(b"video"))},
+                idempotency_key="upload-1",
+            )
+    finally:
+        client.close()
+
+    assert calls == 1
+
+
 def test_sync_rate_limit_preserves_structured_quota_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -821,6 +897,54 @@ def test_async_post_with_idempotency_key_retries(monkeypatch: pytest.MonkeyPatch
 
     asyncio.run(_run())
     assert calls["count"] == 3
+
+
+def test_async_multipart_retry_rewinds_seekable_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bodies: list[bytes] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(await request.aread())
+        return httpx.Response(500 if len(bodies) == 1 else 201, json={"ok": True})
+
+    async def no_sleep(_delay: float) -> None:
+        return None
+
+    cfg = ClientConfig.from_env(
+        api_key="vv_test_api_key",
+        base_url="https://example.test/api/v2",
+        max_retries=1,
+    )
+    client = AsyncHttpClient(cfg)
+    async_client = httpx.AsyncClient(
+        base_url=cfg.base_url,
+        headers=client._default_headers(),
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def ensure_client() -> httpx.AsyncClient:
+        return async_client
+
+    client._client = async_client
+    client._ensure_client = ensure_client  # type: ignore[assignment]
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+
+    async def _run() -> None:
+        try:
+            await client.post(
+                "/workflow/upload",
+                files={"file": ("demo.mp4", io.BytesIO(b"large-video-without-buffering"))},
+                idempotency_key="upload-1",
+            )
+        finally:
+            await client.close()
+
+    asyncio.run(_run())
+
+    assert len(bodies) == 2
+    assert b"large-video-without-buffering" in bodies[0]
+    assert b"large-video-without-buffering" in bodies[1]
 
 
 def test_async_rate_limit_preserves_structured_llm_contract(

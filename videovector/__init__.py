@@ -165,6 +165,13 @@ from ._types import (
     WebhookStatus,
     WebhookTestResponse,
     WebhookWithSecret,
+    WorkflowDefineResponse,
+    WorkflowDestination,
+    WorkflowPagination,
+    WorkflowProcessResponse,
+    WorkflowPromptDefinition,
+    WorkflowSearchResponse,
+    WorkflowUploadResponse,
 )
 from ._version import __version__
 
@@ -223,6 +230,8 @@ __all__ = [
     "ImageSearchResult",
     "MultimodalSearchResult",
     "FilterSearchResponse",
+    "WorkflowSearchResponse",
+    "WorkflowPagination",
     # Types - Connectors
     "Connector",
     "CloudFile",
@@ -246,6 +255,11 @@ __all__ = [
     # Types - Utilities
     "SignedUrl",
     "UploadResult",
+    "WorkflowUploadResponse",
+    "WorkflowDestination",
+    "WorkflowPromptDefinition",
+    "WorkflowDefineResponse",
+    "WorkflowProcessResponse",
     "DeleteResponse",
     "IndexDeletionResponse",
     "VideoDeletionResponse",
