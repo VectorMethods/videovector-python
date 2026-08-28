@@ -2,6 +2,9 @@
 VideoVector SDK Rate Limits Resource.
 
 Provides methods for querying and refreshing per-user rate-limit status.
+
+The current backend routes accept an API key or Firebase ID token, but not a
+WorkOS OAuth access token.
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ if TYPE_CHECKING:
 
 
 class RateLimitsResource:
-    """Synchronous rate-limits resource."""
+    """Synchronous rate limits using API-key or Firebase authentication."""
 
     def __init__(self, client: "SyncHttpClient") -> None:
         self._client = client
@@ -32,7 +35,7 @@ class RateLimitsResource:
 
 
 class AsyncRateLimitsResource:
-    """Asynchronous rate-limits resource."""
+    """Asynchronous rate limits using API-key or Firebase authentication."""
 
     def __init__(self, client: "AsyncHttpClient") -> None:
         self._client = client

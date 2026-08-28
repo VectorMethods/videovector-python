@@ -8,7 +8,12 @@ from __future__ import annotations
 
 from typing import Optional
 
-from ._config import AuthMode, ClientConfig
+from ._config import (
+    AsyncOAuthTokenProvider,
+    AuthMode,
+    ClientConfig,
+    OAuthTokenProvider,
+)
 from ._http import AsyncHttpClient, SyncHttpClient
 from .resources import (
     ApiKeysResource,
@@ -83,8 +88,12 @@ class VideoVector:
     Args:
         api_key: API key for authentication.
             Can also be set via VIDEO_VECTOR_API_KEY environment variable.
-        bearer_token: JWT bearer token for authentication.
+        bearer_token: Static bearer token for authentication, including a
+            short-lived WorkOS OAuth access token.
             Can also be set via VIDEO_VECTOR_BEARER_TOKEN environment variable.
+        oauth_token_provider: Callable that returns a current WorkOS OAuth access
+            token for each HTTP attempt. The provider owns authorization, refresh,
+            concurrency, and secure token storage.
         auth_mode: Explicit auth mode when both auth credentials are present.
             Valid values: "api_key" or "bearer".
             Can also be set via VIDEO_VECTOR_AUTH_MODE environment variable.
@@ -128,6 +137,7 @@ class VideoVector:
         api_key: Optional[str] = None,
         bearer_token: Optional[str] = None,
         *,
+        oauth_token_provider: Optional[OAuthTokenProvider] = None,
         auth_mode: Optional[AuthMode] = None,
         base_url: Optional[str] = None,
         timeout: Optional[float] = None,
@@ -138,6 +148,7 @@ class VideoVector:
         self._config = ClientConfig.from_env(
             api_key=api_key,
             bearer_token=bearer_token,
+            oauth_token_provider=oauth_token_provider,
             auth_mode=auth_mode,
             base_url=base_url,
             timeout=timeout,
@@ -208,8 +219,12 @@ class AsyncVideoVector:
     Args:
         api_key: API key for authentication.
             Can also be set via VIDEO_VECTOR_API_KEY environment variable.
-        bearer_token: JWT bearer token for authentication.
+        bearer_token: Static bearer token for authentication, including a
+            short-lived WorkOS OAuth access token.
             Can also be set via VIDEO_VECTOR_BEARER_TOKEN environment variable.
+        oauth_token_provider: Sync or async callable that returns a current WorkOS
+            OAuth access token for each HTTP attempt. The provider owns
+            authorization, refresh, concurrency, and secure token storage.
         auth_mode: Explicit auth mode when both auth credentials are present.
             Valid values: "api_key" or "bearer".
             Can also be set via VIDEO_VECTOR_AUTH_MODE environment variable.
@@ -253,6 +268,7 @@ class AsyncVideoVector:
         api_key: Optional[str] = None,
         bearer_token: Optional[str] = None,
         *,
+        oauth_token_provider: Optional[AsyncOAuthTokenProvider] = None,
         auth_mode: Optional[AuthMode] = None,
         base_url: Optional[str] = None,
         timeout: Optional[float] = None,
@@ -263,6 +279,7 @@ class AsyncVideoVector:
         self._config = ClientConfig.from_env(
             api_key=api_key,
             bearer_token=bearer_token,
+            oauth_token_provider=oauth_token_provider,
             auth_mode=auth_mode,
             base_url=base_url,
             timeout=timeout,

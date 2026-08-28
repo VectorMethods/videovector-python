@@ -443,7 +443,7 @@ def test_sync_fallback_retry_wait_is_clamped(
     delays: list[float] = []
     monkeypatch.setattr("time.sleep", delays.append)
     try:
-        with pytest.raises(VideoVectorError, match="synthetic transport failure"):
+        with pytest.raises(VideoVectorError, match="Request failed"):
             client.get("/indexes")
     finally:
         client.close()
@@ -478,7 +478,7 @@ def test_async_fallback_retry_wait_is_clamped(
 
     async def run() -> None:
         try:
-            with pytest.raises(VideoVectorError, match="synthetic transport failure"):
+            with pytest.raises(VideoVectorError, match="Request failed"):
                 await client.get("/indexes")
         finally:
             await client.close()

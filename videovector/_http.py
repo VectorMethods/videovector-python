@@ -7,7 +7,9 @@ Low-level HTTP client with retry logic, authentication, and error handling.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import math
+import re
 import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -17,6 +19,7 @@ import httpx
 
 from ._config import ClientConfig
 from ._exceptions import (
+    AuthenticationError,
     ConnectionError,
     RateLimitError,
     TimeoutError,
@@ -26,6 +29,112 @@ from ._exceptions import (
 from ._version import __version__
 
 _DEFAULT_RETRY_AFTER_SECONDS = 60
+_MAX_OAUTH_ACCESS_TOKEN_LENGTH = 16_384
+_OAUTH_BEARER_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9._~+/-]+={0,}")
+
+
+def _uses_oauth_token_provider(config: ClientConfig) -> bool:
+    return config.oauth_token_provider is not None and config.auth_mode != "api_key"
+
+
+def _validated_oauth_access_token(value: object) -> Optional[str]:
+    """Return a valid provider result without raising while it is in scope."""
+    if (
+        not isinstance(value, str)
+        or len(value) == 0
+        or len(value) > _MAX_OAUTH_ACCESS_TOKEN_LENGTH
+        or _OAUTH_BEARER_TOKEN_PATTERN.fullmatch(value) is None
+    ):
+        return None
+    return value
+
+
+def _scrub_sensitive_headers(headers: Any) -> None:
+    """Remove credentials from request-local header containers in place."""
+    for name in ("Authorization", "X-API-Key"):
+        try:
+            del headers[name]
+        except (AttributeError, KeyError, TypeError):
+            pass
+
+
+def _scrub_response_request_credentials(response: httpx.Response) -> None:
+    """Prevent response/request traceback locals from retaining credentials."""
+    try:
+        request = response.request
+    except RuntimeError:
+        return
+    _scrub_sensitive_headers(request.headers)
+
+
+def _sync_oauth_headers(config: ClientConfig) -> Dict[str, str]:
+    if not _uses_oauth_token_provider(config):
+        return {}
+
+    provider = config.oauth_token_provider
+    assert provider is not None
+    provider_failed = False
+    try:
+        value = provider()
+    except Exception:
+        provider_failed = True
+        value = None
+
+    if provider_failed:
+        raise AuthenticationError(
+            "OAuth token provider failed to supply an access token.",
+            error_code="oauth_token_provider_failed",
+        )
+    if inspect.isawaitable(value):
+        if inspect.iscoroutine(value):
+            value.close()
+        value = None
+        raise AuthenticationError(
+            "The synchronous client requires a synchronous OAuth token provider.",
+            error_code="oauth_token_provider_async_result",
+        )
+    token = _validated_oauth_access_token(value)
+    value = None
+    if token is None:
+        raise AuthenticationError(
+            "OAuth token provider returned an invalid access token.",
+            error_code="oauth_token_provider_invalid_result",
+        )
+    header = {"Authorization": f"Bearer {token}"}
+    token = None
+    return header
+
+
+async def _async_oauth_headers(config: ClientConfig) -> Dict[str, str]:
+    if not _uses_oauth_token_provider(config):
+        return {}
+
+    provider = config.oauth_token_provider
+    assert provider is not None
+    provider_failed = False
+    try:
+        value = provider()
+        if inspect.isawaitable(value):
+            value = await value
+    except Exception:
+        provider_failed = True
+        value = None
+
+    if provider_failed:
+        raise AuthenticationError(
+            "OAuth token provider failed to supply an access token.",
+            error_code="oauth_token_provider_failed",
+        )
+    token = _validated_oauth_access_token(value)
+    value = None
+    if token is None:
+        raise AuthenticationError(
+            "OAuth token provider returned an invalid access token.",
+            error_code="oauth_token_provider_invalid_result",
+        )
+    header = {"Authorization": f"Bearer {token}"}
+    token = None
+    return header
 
 
 def _multipart_replay_state(
@@ -64,10 +173,12 @@ def _default_headers_for_config(config: ClientConfig) -> Dict[str, str]:
         "Accept": "application/json",
         "User-Agent": f"videovector-python/{__version__}",
     }
-    if config.auth_mode == "bearer" and config.bearer_token:
-        headers["Authorization"] = f"Bearer {config.bearer_token}"
-    elif config.auth_mode == "api_key" and config.api_key:
-        headers["X-API-Key"] = config.api_key
+    if config.auth_mode == "bearer":
+        if config.bearer_token:
+            headers["Authorization"] = f"Bearer {config.bearer_token}"
+    elif config.auth_mode == "api_key":
+        if config.api_key:
+            headers["X-API-Key"] = config.api_key
     elif config.bearer_token:
         headers["Authorization"] = f"Bearer {config.bearer_token}"
     elif config.api_key:
@@ -144,24 +255,31 @@ class SyncHttpClient:
             multipart_content = prepared_request.read()
             request_headers["Content-Type"] = prepared_request.headers["Content-Type"]
             request_headers["Content-Length"] = str(len(multipart_content))
+            _scrub_sensitive_headers(prepared_request.headers)
 
-        last_exception: Optional[Exception] = None
         retry_count = 0
 
         while retry_count <= self._config.max_retries:
+            attempt_error: Optional[VideoVectorError] = None
             try:
                 if retry_count:
                     _rewind_multipart_parts(multipart_positions)
-                response = self._client.request(
-                    method=method,
-                    url=endpoint,
-                    params=_clean_params(params),
-                    json=json if multipart_content is None else None,
-                    data=data if multipart_content is None else None,
-                    files=files if multipart_content is None else None,
-                    content=multipart_content,
-                    headers=request_headers if request_headers else None,
-                )
+                attempt_headers = dict(request_headers)
+                try:
+                    attempt_headers.update(_sync_oauth_headers(self._config))
+                    response = self._client.request(
+                        method=method,
+                        url=endpoint,
+                        params=_clean_params(params),
+                        json=json if multipart_content is None else None,
+                        data=data if multipart_content is None else None,
+                        files=files if multipart_content is None else None,
+                        content=multipart_content,
+                        headers=attempt_headers if attempt_headers else None,
+                    )
+                finally:
+                    _scrub_sensitive_headers(attempt_headers)
+                _scrub_response_request_credentials(response)
 
                 if response.status_code == 429:
                     retry_after = _get_retry_after(
@@ -192,35 +310,28 @@ class SyncHttpClient:
 
                 return _decode_json_response(response)
 
-            except httpx.TimeoutException as e:
-                last_exception = TimeoutError(f"Request timed out: {e}")
-                if allow_retry and retry_count < self._config.max_retries:
-                    retry_count += 1
-                    time.sleep(min(2**retry_count, self._config.max_retry_delay))
-                    continue
-                raise last_exception
+            except httpx.TimeoutException:
+                attempt_error = TimeoutError("Request timed out.")
 
-            except httpx.ConnectError as e:
-                last_exception = ConnectionError(f"Connection failed: {e}")
-                if allow_retry and retry_count < self._config.max_retries:
-                    retry_count += 1
-                    time.sleep(min(2**retry_count, self._config.max_retry_delay))
-                    continue
-                raise last_exception
+            except httpx.ConnectError:
+                attempt_error = ConnectionError("Connection failed.")
 
             except (RateLimitError, VideoVectorError):
                 raise
 
-            except Exception as e:
-                last_exception = VideoVectorError(f"Request failed: {e}")
-                if allow_retry and retry_count < self._config.max_retries:
-                    retry_count += 1
-                    time.sleep(min(2**retry_count, self._config.max_retry_delay))
-                    continue
-                raise last_exception
+            except Exception:
+                attempt_error = VideoVectorError("Request failed.")
 
-        if last_exception:
-            raise last_exception
+            # Raise only after leaving the active httpx exception handler. An
+            # httpx transport exception retains its request, including the
+            # Authorization header, through ``__context__`` if chained.
+            assert attempt_error is not None
+            if allow_retry and retry_count < self._config.max_retries:
+                retry_count += 1
+                time.sleep(min(2**retry_count, self._config.max_retry_delay))
+                continue
+            raise attempt_error
+
         raise VideoVectorError("Request failed after max retries")
 
     def get(
@@ -245,12 +356,16 @@ class SyncHttpClient:
         _validate_stream_limits(chunk_size=chunk_size, max_bytes=max_bytes)
         stream_headers = _identity_encoded_download_headers(headers)
 
+        stream_error: Optional[VideoVectorError] = None
         try:
+            stream_headers.update(_sync_oauth_headers(self._config))
             with self._client.stream(
                 method="GET",
                 url=endpoint,
                 headers=stream_headers,
             ) as response:
+                _scrub_sensitive_headers(stream_headers)
+                _scrub_response_request_credentials(response)
                 if response.status_code != 200:
                     response.read()
                     if response.status_code < 400:
@@ -284,14 +399,19 @@ class SyncHttpClient:
                     expected_length=expected_length,
                     actual_length=total,
                 )
-        except httpx.TimeoutException as exc:
-            raise TimeoutError(f"Download timed out: {exc}") from exc
-        except httpx.ConnectError as exc:
-            raise ConnectionError(f"Download connection failed: {exc}") from exc
+        except httpx.TimeoutException:
+            stream_error = TimeoutError("Download timed out.")
+        except httpx.ConnectError:
+            stream_error = ConnectionError("Download connection failed.")
         except (RateLimitError, VideoVectorError):
             raise
-        except httpx.HTTPError as exc:
-            raise ConnectionError(f"Download failed: {exc}") from exc
+        except httpx.HTTPError:
+            stream_error = ConnectionError("Download failed.")
+        finally:
+            _scrub_sensitive_headers(stream_headers)
+
+        if stream_error is not None:
+            raise stream_error
 
     def post(
         self,
@@ -440,24 +560,31 @@ class AsyncHttpClient:
             multipart_content = await prepared_request.aread()
             request_headers["Content-Type"] = prepared_request.headers["Content-Type"]
             request_headers["Content-Length"] = str(len(multipart_content))
+            _scrub_sensitive_headers(prepared_request.headers)
 
-        last_exception: Optional[Exception] = None
         retry_count = 0
 
         while retry_count <= self._config.max_retries:
+            attempt_error: Optional[VideoVectorError] = None
             try:
                 if retry_count:
                     _rewind_multipart_parts(multipart_positions)
-                response = await client.request(
-                    method=method,
-                    url=endpoint,
-                    params=_clean_params(params),
-                    json=json if multipart_content is None else None,
-                    data=data if multipart_content is None else None,
-                    files=files if multipart_content is None else None,
-                    content=multipart_content,
-                    headers=request_headers if request_headers else None,
-                )
+                attempt_headers = dict(request_headers)
+                try:
+                    attempt_headers.update(await _async_oauth_headers(self._config))
+                    response = await client.request(
+                        method=method,
+                        url=endpoint,
+                        params=_clean_params(params),
+                        json=json if multipart_content is None else None,
+                        data=data if multipart_content is None else None,
+                        files=files if multipart_content is None else None,
+                        content=multipart_content,
+                        headers=attempt_headers if attempt_headers else None,
+                    )
+                finally:
+                    _scrub_sensitive_headers(attempt_headers)
+                _scrub_response_request_credentials(response)
 
                 if response.status_code == 429:
                     retry_after = _get_retry_after(
@@ -488,35 +615,27 @@ class AsyncHttpClient:
 
                 return _decode_json_response(response)
 
-            except httpx.TimeoutException as e:
-                last_exception = TimeoutError(f"Request timed out: {e}")
-                if allow_retry and retry_count < self._config.max_retries:
-                    retry_count += 1
-                    await asyncio.sleep(min(2**retry_count, self._config.max_retry_delay))
-                    continue
-                raise last_exception
+            except httpx.TimeoutException:
+                attempt_error = TimeoutError("Request timed out.")
 
-            except httpx.ConnectError as e:
-                last_exception = ConnectionError(f"Connection failed: {e}")
-                if allow_retry and retry_count < self._config.max_retries:
-                    retry_count += 1
-                    await asyncio.sleep(min(2**retry_count, self._config.max_retry_delay))
-                    continue
-                raise last_exception
+            except httpx.ConnectError:
+                attempt_error = ConnectionError("Connection failed.")
 
             except (RateLimitError, VideoVectorError):
                 raise
 
-            except Exception as e:
-                last_exception = VideoVectorError(f"Request failed: {e}")
-                if allow_retry and retry_count < self._config.max_retries:
-                    retry_count += 1
-                    await asyncio.sleep(min(2**retry_count, self._config.max_retry_delay))
-                    continue
-                raise last_exception
+            except Exception:
+                attempt_error = VideoVectorError("Request failed.")
 
-        if last_exception:
-            raise last_exception
+            # Keep the original transport exception (and its request headers)
+            # out of the public SDK exception graph.
+            assert attempt_error is not None
+            if allow_retry and retry_count < self._config.max_retries:
+                retry_count += 1
+                await asyncio.sleep(min(2**retry_count, self._config.max_retry_delay))
+                continue
+            raise attempt_error
+
         raise VideoVectorError("Request failed after max retries")
 
     async def get(
@@ -542,12 +661,16 @@ class AsyncHttpClient:
         client = await self._ensure_client()
         stream_headers = _identity_encoded_download_headers(headers)
 
+        stream_error: Optional[VideoVectorError] = None
         try:
+            stream_headers.update(await _async_oauth_headers(self._config))
             async with client.stream(
                 method="GET",
                 url=endpoint,
                 headers=stream_headers,
             ) as response:
+                _scrub_sensitive_headers(stream_headers)
+                _scrub_response_request_credentials(response)
                 if response.status_code != 200:
                     await response.aread()
                     if response.status_code < 400:
@@ -581,14 +704,19 @@ class AsyncHttpClient:
                     expected_length=expected_length,
                     actual_length=total,
                 )
-        except httpx.TimeoutException as exc:
-            raise TimeoutError(f"Download timed out: {exc}") from exc
-        except httpx.ConnectError as exc:
-            raise ConnectionError(f"Download connection failed: {exc}") from exc
+        except httpx.TimeoutException:
+            stream_error = TimeoutError("Download timed out.")
+        except httpx.ConnectError:
+            stream_error = ConnectionError("Download connection failed.")
         except (RateLimitError, VideoVectorError):
             raise
-        except httpx.HTTPError as exc:
-            raise ConnectionError(f"Download failed: {exc}") from exc
+        except httpx.HTTPError:
+            stream_error = ConnectionError("Download failed.")
+        finally:
+            _scrub_sensitive_headers(stream_headers)
+
+        if stream_error is not None:
+            raise stream_error
 
     async def post(
         self,

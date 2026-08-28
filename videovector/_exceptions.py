@@ -45,7 +45,7 @@ class VideoVectorError(Exception):
 
 
 class AuthenticationError(VideoVectorError):
-    """Raised when API key is invalid, missing, or expired."""
+    """Raised when an API key or bearer credential is invalid, missing, or expired."""
 
     pass
 

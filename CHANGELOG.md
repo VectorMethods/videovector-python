@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 1.1.0
+
+- Added synchronous and asynchronous WorkOS OAuth token-provider support while
+  preserving API keys and static bearer tokens. Providers are invoked for each
+  wire attempt, fail closed before network I/O, and keep refresh, browser login,
+  and secure token storage in the host application's OAuth library.
+- Removed request credentials from translated transport-error chains, response
+  request metadata, and traceback-local header dictionaries before SDK errors
+  leave the transport boundary.
 - Added the typed synchronous and asynchronous simplified workflow surface for
   upload, prompt definition, processing, stable search pagination, and
   searchable-run polling.
@@ -28,9 +37,6 @@
 - Fixed immutable-release provenance to attest the checksum-reviewed `uv`
   installer actually used by CI instead of requiring intentionally removed,
   unused `pip`.
-
-## 1.1.0
-
 - Added an optional `source_connector_id` argument to synchronous and asynchronous
   `videos.create` calls. Existing public and platform-managed GCS calls keep the
   same request payload when the argument is omitted.

@@ -63,16 +63,19 @@ Async Usage:
 
 Environment Variables:
     VIDEO_VECTOR_API_KEY: API key for authentication
-    VIDEO_VECTOR_BEARER_TOKEN: JWT bearer token for authentication
+    VIDEO_VECTOR_BEARER_TOKEN: Static OAuth access token or Firebase ID token
     VIDEO_VECTOR_AUTH_MODE: Explicit auth mode when both credentials exist (api_key or bearer)
     VIDEO_VECTOR_BASE_URL: Base URL (default: videovector._config.DEFAULT_BASE_URL)
     VIDEO_VECTOR_TIMEOUT: Request timeout in seconds (default: 60)
     VIDEO_VECTOR_MAX_RETRIES: Max retry attempts (default: 3)
     VIDEO_VECTOR_MAX_RETRY_DELAY: Max retry wait in seconds (default: 300)
+
+Long-lived OAuth clients should pass oauth_token_provider to VideoVector or
+AsyncVideoVector so an established OAuth session can refresh outside the SDK.
 """
 
 from ._client import AsyncVideoVector, VideoVector
-from ._config import ClientConfig
+from ._config import AsyncOAuthTokenProvider, ClientConfig, OAuthTokenProvider
 from ._exceptions import (
     AuthenticationError,
     AuthorizationError,
@@ -183,6 +186,8 @@ __all__ = [
     "AsyncVideoVector",
     # Configuration
     "ClientConfig",
+    "OAuthTokenProvider",
+    "AsyncOAuthTokenProvider",
     # Exceptions
     "VideoVectorError",
     "AuthenticationError",
