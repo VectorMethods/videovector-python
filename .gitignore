@@ -21,6 +21,7 @@ ENV/
 build/
 dist/
 release-bundle/
+release-transport/
 *.egg-info/
 .pytest_cache/
 .mypy_cache/

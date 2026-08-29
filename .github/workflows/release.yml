@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Bot-created release tag, for example videovector-v1.0.0"
+        description: "Bot-created stable release tag, for example videovector-v1.2.3"
         required: true
         type: string
       release_body_sha256:
@@ -12,11 +12,34 @@ on:
         required: true
         type: string
       expected_target_sha:
-        description: "Exact commit SHA peeled from the immutable bot-created release tag"
+        description: "Exact commit SHA named by the immutable lightweight release tag"
         required: true
         type: string
+      operation_nonce:
+        description: "Deterministic SHA-256 identity for this exact release operation"
+        required: true
+        type: string
+      draft_release_id:
+        description: "Exact bot-owned draft GitHub Release id to stage before publication"
+        required: true
+        type: string
+      bundle_source_release_id:
+        description: "Optional exact GitHub Release id holding a reusable release-bundle.zip"
+        required: false
+        default: ""
+        type: string
+      bundle_source_asset_id:
+        description: "Optional exact release-bundle.zip asset id; required with bundle_source_release_id"
+        required: false
+        default: ""
+        type: string
+      bundle_source_sha256:
+        description: "Optional exact release-bundle.zip SHA-256; required with bundle_source_release_id"
+        required: false
+        default: ""
+        type: string
 
-run-name: Release ${{ inputs.release_tag }}
+run-name: Release ${{ inputs.release_tag }} [${{ inputs.operation_nonce }}]
 
 permissions:
   contents: read
@@ -28,41 +51,45 @@ concurrency:
 jobs:
   guard:
     name: Validate bot release request
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     outputs:
+      resume: ${{ steps.validate.outputs.resume }}
       source_sha: ${{ steps.validate.outputs.source_sha }}
       version: ${{ steps.validate.outputs.version }}
 
     steps:
-      - name: Checkout release tag
+      - name: Checkout exact release tag
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: refs/tags/${{ inputs.release_tag }}
           fetch-depth: 0
 
-      - name: Setup Python
+      - name: Setup immutable release Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.11"
+          python-version: "3.11.13"
 
-      - name: Validate actor and immutable release ref
+      - name: Validate actor, operation nonce, and immutable release ref
         id: validate
         env:
+          BUNDLE_SOURCE_ASSET_ID: ${{ inputs.bundle_source_asset_id }}
+          BUNDLE_SOURCE_RELEASE_ID: ${{ inputs.bundle_source_release_id }}
+          BUNDLE_SOURCE_SHA256: ${{ inputs.bundle_source_sha256 }}
+          DRAFT_RELEASE_ID: ${{ inputs.draft_release_id }}
           EXPECTED_TARGET_SHA: ${{ inputs.expected_target_sha }}
+          OPERATION_NONCE: ${{ inputs.operation_nonce }}
           RELEASE_BODY_SHA256: ${{ inputs.release_body_sha256 }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           RELEASE_TAG_PREFIX: videovector-v
-        run: |
-          set -euo pipefail
-          bash scripts/validate_release_request.sh
+        run: timeout 60 bash scripts/validate_release_request.sh
 
-      - name: Validate release metadata
+      - name: Validate stable package version
         env:
           RELEASE_VERSION: ${{ steps.validate.outputs.version }}
         run: |
           set -euo pipefail
-          python - <<'PY'
+          timeout 20 python - <<'PY'
           import os
           import re
           import sys
@@ -70,8 +97,11 @@ jobs:
           from pathlib import Path
 
           version = os.environ["RELEASE_VERSION"]
-          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[a-z0-9.-]+)?", version):
-              raise SystemExit("invalid release version")
+          if not re.fullmatch(
+              r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)",
+              version,
+          ):
+              raise SystemExit("SDK releases must use a stable canonical X.Y.Z version")
           pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
           package_version = pyproject["project"]["version"]
           version_file = Path("videovector/_version.py").read_text(encoding="utf-8")
@@ -85,32 +115,34 @@ jobs:
           PY
 
   build:
-    name: Build and check SDK artifacts
+    name: Build or recover and verify exact SDK bytes
     needs: guard
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
 
     steps:
-      - name: Checkout release tag
+      - name: Checkout guarded source commit
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.guard.outputs.source_sha }}
           fetch-depth: 0
 
-      - name: Setup Python
+      - name: Setup immutable release Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.11"
+          python-version: "3.11.13"
 
       - name: Install checksum-pinned package installer
-        run: bash scripts/install_reviewed_uv.sh
+        run: timeout 90 bash scripts/install_reviewed_uv.sh
 
-      - name: Install hash-locked dependencies
+      - name: Install hash-locked test and build dependencies
         run: |
           set -euo pipefail
-          uv pip install --python "$(command -v python)" --system \
+          timeout 180 uv pip install --python "$(command -v python)" --system \
             --require-hashes --requirements requirements-dev.lock
-          uv pip install --python "$(command -v python)" --system \
+          timeout 60 uv pip install --python "$(command -v python)" --system \
             --no-deps --no-build-isolation --editable .
           uv pip uninstall --python "$(command -v python)" --system pip
           if python -m pip --version >/dev/null 2>&1; then
@@ -118,15 +150,19 @@ jobs:
             exit 1
           fi
 
-      - name: Run release checks
+      - name: Run full source checks for fresh and resumed operations
         run: |
           set -euo pipefail
-          ruff check videovector tests examples scripts
-          black --check videovector tests examples scripts
-          mypy videovector scripts/release_artifacts.py
-          pytest -q tests
+          timeout 30 ruff check videovector tests examples scripts
+          timeout 30 black --check videovector tests examples scripts
+          timeout 90 mypy videovector scripts/release_artifacts.py \
+            scripts/release_process.py \
+            scripts/release_draft_staging.py \
+            scripts/smoke_release_install.py
+          timeout 240 pytest -q tests
 
-      - name: Build deterministic release bundle once
+      - name: Build deterministic release bundle exactly once
+        if: ${{ needs.guard.outputs.resume != 'true' }}
         env:
           RELEASE_BODY_SHA256: ${{ inputs.release_body_sha256 }}
           RELEASE_TAG: ${{ inputs.release_tag }}
@@ -134,87 +170,208 @@ jobs:
           SOURCE_SHA: ${{ needs.guard.outputs.source_sha }}
         run: |
           set -euo pipefail
-          python scripts/release_artifacts.py build \
+          timeout 120 python scripts/release_artifacts.py build \
             --output release-bundle \
             --tag "$RELEASE_TAG" \
             --tag-sha "$SOURCE_SHA" \
             --source-sha "$SOURCE_SHA" \
             --version "$RELEASE_VERSION" \
             --release-body-sha256 "$RELEASE_BODY_SHA256"
-          python scripts/release_artifacts.py verify-bundle \
-            --bundle release-bundle \
-            --source-sha "$SOURCE_SHA" \
-            --tag-sha "$SOURCE_SHA" \
-            --release-body-sha256 "$RELEASE_BODY_SHA256"
-          python -m twine check release-bundle/dist/*
 
-      - name: Local wheel install smoke
+      - name: Assemble fresh or recovered bytes without write credentials
+        id: assemble
+        env:
+          BUNDLE_SOURCE_ASSET_ID: ${{ inputs.bundle_source_asset_id }}
+          BUNDLE_SOURCE_RELEASE_ID: ${{ inputs.bundle_source_release_id }}
+          BUNDLE_SOURCE_SHA256: ${{ inputs.bundle_source_sha256 }}
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_BODY_SHA256: ${{ inputs.release_body_sha256 }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_SHA: ${{ needs.guard.outputs.source_sha }}
         run: |
           set -euo pipefail
-          python -m venv --without-pip /tmp/videovector-wheel-smoke
-          uv pip install \
-            --python /tmp/videovector-wheel-smoke/bin/python \
-            release-bundle/dist/*.whl
-          /tmp/videovector-wheel-smoke/bin/python - <<'PY'
-          from videovector import AsyncVideoVector, VideoVector, __version__
+          timeout 90 python scripts/release_draft_staging.py assemble \
+            --kind sdk \
+            --repository "$GITHUB_REPOSITORY" \
+            --release-tag "$RELEASE_TAG" \
+            --expected-target-sha "$SOURCE_SHA" \
+            --release-body-sha256 "$RELEASE_BODY_SHA256" \
+            --bundle-source-release-id "$BUNDLE_SOURCE_RELEASE_ID" \
+            --bundle-source-asset-id "$BUNDLE_SOURCE_ASSET_ID" \
+            --bundle-source-sha256 "$BUNDLE_SOURCE_SHA256" \
+            --bundle release-bundle \
+            --archive release-transport/release-bundle.zip
 
-          assert VideoVector.__name__ == "VideoVector"
-          assert AsyncVideoVector.__name__ == "AsyncVideoVector"
-          assert __version__
-          PY
+      - name: Materialize and reverify assembled bytes
+        env:
+          RELEASE_BODY_SHA256: ${{ inputs.release_body_sha256 }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_SHA: ${{ needs.guard.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          timeout 60 python scripts/release_draft_staging.py materialize \
+            --kind sdk \
+            --release-tag "$RELEASE_TAG" \
+            --expected-target-sha "$SOURCE_SHA" \
+            --release-body-sha256 "$RELEASE_BODY_SHA256" \
+            --archive release-transport/release-bundle.zip \
+            --bundle release-smoke-bundle
+          timeout 30 python -m twine check release-smoke-bundle/dist/*
 
-      - name: Upload immutable release bundle
+      - name: Install and smoke exact wheel and sdist bytes
+        env:
+          RELEASE_VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          set -euo pipefail
+          mapfile -t wheels < <(find release-smoke-bundle/dist -maxdepth 1 -type f -name '*.whl')
+          mapfile -t sdists < <(find release-smoke-bundle/dist -maxdepth 1 -type f -name '*.tar.gz')
+          if [[ "${#wheels[@]}" != 1 || "${#sdists[@]}" != 1 ]]; then
+            echo "Expected exactly one wheel and one sdist." >&2
+            exit 1
+          fi
+          artifacts=("${wheels[0]}" "${sdists[0]}")
+          for index in 0 1; do
+            environment="/tmp/videovector-artifact-smoke-${index}"
+            rm -rf "$environment"
+            python -m venv --without-pip "$environment"
+            timeout 90 uv pip install \
+              --python "$environment/bin/python" \
+              --require-hashes \
+              --requirements requirements-dev.lock
+            timeout 60 uv pip install \
+              --python "$environment/bin/python" \
+              --no-deps \
+              --no-build-isolation \
+              "${artifacts[$index]}"
+            timeout 20 "$environment/bin/python" scripts/smoke_release_install.py \
+              --expected-version "$RELEASE_VERSION"
+          done
+
+      - name: Upload read-only verified candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: sdk-release-bundle
-          path: release-bundle/
+          name: sdk-release-candidate
+          path: release-transport/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
 
-  publish-testpypi:
-    name: Publish to TestPyPI
+  stage-draft:
+    name: Stage exact SDK bytes on the bot-owned draft
     needs:
       - guard
       - build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 7
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+
+    steps:
+      - name: Checkout guarded release verifier
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.guard.outputs.source_sha }}
+
+      - name: Setup immutable release Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11.13"
+
+      - name: Download read-only verified candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: sdk-release-candidate
+          path: release-transport
+
+      - name: Reverify and reconcile the exact draft assets
+        env:
+          DRAFT_RELEASE_ID: ${{ inputs.draft_release_id }}
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_BODY_SHA256: ${{ inputs.release_body_sha256 }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_SHA: ${{ needs.guard.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          timeout 120 python scripts/release_draft_staging.py stage \
+            --kind sdk \
+            --repository "$GITHUB_REPOSITORY" \
+            --release-tag "$RELEASE_TAG" \
+            --expected-target-sha "$SOURCE_SHA" \
+            --release-body-sha256 "$RELEASE_BODY_SHA256" \
+            --draft-release-id "$DRAFT_RELEASE_ID" \
+            --archive release-transport/release-bundle.zip \
+            --bundle release-bundle
+
+      - name: Attest the exact staged release assets
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            release-transport/release-bundle.zip
+            release-transport/release-manifest.json
+            release-transport/registry-metadata.json
+
+      - name: Upload immutable verified release bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: sdk-release-bundle
+          path: release-transport/
+          if-no-files-found: error
+          retention-days: 90
+
+  publish-testpypi:
+    name: Publish exact bytes to TestPyPI
+    needs:
+      - guard
+      - stage-draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 7
     environment: testpypi
     permissions:
       contents: read
       id-token: write
 
     steps:
-      - name: Checkout release verifier
+      - name: Checkout guarded release verifier
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.guard.outputs.source_sha }}
 
-      - name: Setup Python
+      - name: Setup immutable release Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.11"
+          python-version: "3.11.13"
 
       - name: Download immutable release bundle
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: sdk-release-bundle
-          path: release-bundle
+          path: release-transport
 
-      - name: Classify existing TestPyPI version
-        id: registry
+      - name: Materialize and semantically verify exact bytes
         env:
           RELEASE_BODY_SHA256: ${{ inputs.release_body_sha256 }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
           SOURCE_SHA: ${{ needs.guard.outputs.source_sha }}
         run: |
           set -euo pipefail
-          python scripts/release_artifacts.py verify-bundle \
-            --bundle release-bundle \
-            --source-sha "$SOURCE_SHA" \
-            --tag-sha "$SOURCE_SHA" \
-            --release-body-sha256 "$RELEASE_BODY_SHA256"
+          timeout 60 python scripts/release_draft_staging.py materialize \
+            --kind sdk \
+            --release-tag "$RELEASE_TAG" \
+            --expected-target-sha "$SOURCE_SHA" \
+            --release-body-sha256 "$RELEASE_BODY_SHA256" \
+            --archive release-transport/release-bundle.zip \
+            --bundle release-bundle
+
+      - name: Classify exact TestPyPI state
+        id: registry
+        run: |
+          set -euo pipefail
           set +e
-          python scripts/release_artifacts.py registry-status \
+          timeout 45 python scripts/release_artifacts.py registry-status \
             --bundle release-bundle \
             --registry testpypi \
+            --timeout 10 \
             --write-missing release-bundle/publish-testpypi
           status="$?"
           set -e
@@ -224,7 +381,7 @@ jobs:
             *) exit "$status" ;;
           esac
 
-      - name: Publish tested bytes to TestPyPI
+      - name: Publish tested bytes with OIDC trusted publishing
         if: ${{ steps.registry.outputs.publish == 'true' }}
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
         with:
@@ -234,115 +391,128 @@ jobs:
       - name: Verify exact TestPyPI bytes and metadata
         run: |
           set -euo pipefail
-          for _attempt in $(seq 1 18); do
+          deadline=$((SECONDS + 120))
+          while (( SECONDS < deadline )); do
             set +e
-            python scripts/release_artifacts.py registry-status \
+            timeout 20 python scripts/release_artifacts.py registry-status \
               --bundle release-bundle \
-              --registry testpypi
+              --registry testpypi \
+              --timeout 10
             status="$?"
             set -e
             if [[ "$status" == "0" ]]; then
               exit 0
             fi
-            if [[ "$status" != "3" && "$status" != "4" ]]; then
-              exit "$status"
-            fi
-            sleep 10
+            sleep 5
           done
           exit 1
 
   smoke-test-testpypi:
-    name: Smoke test TestPyPI package
+    name: Smoke exact TestPyPI package contract
     needs:
       - guard
       - publish-testpypi
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
 
     steps:
-      - name: Checkout release installer
+      - name: Checkout guarded smoke contract
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.guard.outputs.source_sha }}
 
-      - name: Setup Python
+      - name: Setup immutable release Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.11"
+          python-version: "3.11.13"
 
       - name: Install checksum-pinned package installer
-        run: bash scripts/install_reviewed_uv.sh
+        run: timeout 90 bash scripts/install_reviewed_uv.sh
 
-      - name: Install from TestPyPI and verify import
+      - name: Install from TestPyPI and smoke sync/async contracts
         env:
           RELEASE_VERSION: ${{ needs.guard.outputs.version }}
         run: |
           set -euo pipefail
-          for _attempt in $(seq 1 18); do
+          deadline=$((SECONDS + 150))
+          while (( SECONDS < deadline )); do
             rm -rf /tmp/videovector-testpypi-smoke
             python -m venv --without-pip /tmp/videovector-testpypi-smoke
-            uv pip install \
+            timeout 45 uv pip install \
               --python /tmp/videovector-testpypi-smoke/bin/python \
+              --no-cache \
               --index-url https://pypi.org/simple/ \
-              "httpx>=0.25.0" \
-              "pydantic>=2.0.0"
-            if uv pip install \
+              "httpx==0.28.1" \
+              "pydantic==2.13.4"
+            if timeout 45 uv pip install \
               --python /tmp/videovector-testpypi-smoke/bin/python \
               --no-deps \
               --no-cache \
               --index-url https://test.pypi.org/simple/ \
               "videovector==${RELEASE_VERSION}"; then
-              /tmp/videovector-testpypi-smoke/bin/python -c "from videovector import AsyncVideoVector, VideoVector; print(VideoVector.__name__, AsyncVideoVector.__name__)"
+              timeout 20 /tmp/videovector-testpypi-smoke/bin/python \
+                scripts/smoke_release_install.py \
+                --expected-version "$RELEASE_VERSION"
               exit 0
             fi
-            sleep 10
+            sleep 5
           done
           exit 1
 
   publish-pypi:
-    name: Publish to PyPI
+    name: Publish exact bytes to PyPI
     needs:
       - guard
+      - stage-draft
       - smoke-test-testpypi
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 7
     environment: pypi
     permissions:
       contents: read
       id-token: write
 
     steps:
-      - name: Checkout release verifier
+      - name: Checkout guarded release verifier
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.guard.outputs.source_sha }}
 
-      - name: Setup Python
+      - name: Setup immutable release Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.11"
+          python-version: "3.11.13"
 
       - name: Download immutable release bundle
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: sdk-release-bundle
-          path: release-bundle
+          path: release-transport
 
-      - name: Classify existing PyPI version
-        id: registry
+      - name: Materialize and semantically verify exact bytes
         env:
           RELEASE_BODY_SHA256: ${{ inputs.release_body_sha256 }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
           SOURCE_SHA: ${{ needs.guard.outputs.source_sha }}
         run: |
           set -euo pipefail
-          python scripts/release_artifacts.py verify-bundle \
-            --bundle release-bundle \
-            --source-sha "$SOURCE_SHA" \
-            --tag-sha "$SOURCE_SHA" \
-            --release-body-sha256 "$RELEASE_BODY_SHA256"
+          timeout 60 python scripts/release_draft_staging.py materialize \
+            --kind sdk \
+            --release-tag "$RELEASE_TAG" \
+            --expected-target-sha "$SOURCE_SHA" \
+            --release-body-sha256 "$RELEASE_BODY_SHA256" \
+            --archive release-transport/release-bundle.zip \
+            --bundle release-bundle
+
+      - name: Classify exact PyPI state
+        id: registry
+        run: |
+          set -euo pipefail
           set +e
-          python scripts/release_artifacts.py registry-status \
+          timeout 45 python scripts/release_artifacts.py registry-status \
             --bundle release-bundle \
             --registry pypi \
+            --timeout 10 \
             --write-missing release-bundle/publish-pypi
           status="$?"
           set -e
@@ -352,7 +522,7 @@ jobs:
             *) exit "$status" ;;
           esac
 
-      - name: Publish tested bytes to PyPI
+      - name: Publish tested bytes with OIDC trusted publishing
         if: ${{ steps.registry.outputs.publish == 'true' }}
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
         with:
@@ -361,60 +531,62 @@ jobs:
       - name: Verify exact PyPI bytes and metadata
         run: |
           set -euo pipefail
-          for _attempt in $(seq 1 18); do
+          deadline=$((SECONDS + 120))
+          while (( SECONDS < deadline )); do
             set +e
-            python scripts/release_artifacts.py registry-status \
+            timeout 20 python scripts/release_artifacts.py registry-status \
               --bundle release-bundle \
-              --registry pypi
+              --registry pypi \
+              --timeout 10
             status="$?"
             set -e
             if [[ "$status" == "0" ]]; then
               exit 0
             fi
-            if [[ "$status" != "3" && "$status" != "4" ]]; then
-              exit "$status"
-            fi
-            sleep 10
+            sleep 5
           done
           exit 1
 
   smoke-test-pypi:
-    name: Smoke test PyPI package
+    name: Smoke exact PyPI package contract
     needs:
       - guard
       - publish-pypi
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
 
     steps:
-      - name: Checkout release installer
+      - name: Checkout guarded smoke contract
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.guard.outputs.source_sha }}
 
-      - name: Setup Python
+      - name: Setup immutable release Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.11"
+          python-version: "3.11.13"
 
       - name: Install checksum-pinned package installer
-        run: bash scripts/install_reviewed_uv.sh
+        run: timeout 90 bash scripts/install_reviewed_uv.sh
 
-      - name: Install from PyPI and verify import
+      - name: Install from PyPI and smoke sync/async contracts
         env:
           RELEASE_VERSION: ${{ needs.guard.outputs.version }}
         run: |
           set -euo pipefail
-          for _attempt in $(seq 1 18); do
+          deadline=$((SECONDS + 150))
+          while (( SECONDS < deadline )); do
             rm -rf /tmp/videovector-pypi-smoke
             python -m venv --without-pip /tmp/videovector-pypi-smoke
-            if uv pip install \
+            if timeout 60 uv pip install \
               --python /tmp/videovector-pypi-smoke/bin/python \
               --no-cache \
               "videovector==${RELEASE_VERSION}"; then
-              /tmp/videovector-pypi-smoke/bin/python -c "from videovector import AsyncVideoVector, VideoVector; print(VideoVector.__name__, AsyncVideoVector.__name__)"
+              timeout 20 /tmp/videovector-pypi-smoke/bin/python \
+                scripts/smoke_release_install.py \
+                --expected-version "$RELEASE_VERSION"
               exit 0
             fi
-            sleep 10
+            sleep 5
           done
           exit 1
