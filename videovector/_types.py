@@ -136,7 +136,7 @@ class SegmentRunProcessingStatus(BaseModel):
 
 
 class VideoLevelProcessingStatus(BaseModel):
-    """Inline video/audio-level synthesis progress inside a video status snapshot."""
+    """Inline grounded video/audio-level extraction progress inside a video status snapshot."""
 
     status: str
     result_available: bool = False
@@ -273,10 +273,9 @@ class Index(BaseModel):
 
 
 class PromptVideoLevelConfig(BaseModel):
-    """Video/audio-level synthesis configuration attached to a prompt."""
+    """Grounded video/audio-level extraction configuration attached to a prompt."""
 
     instructions_text: str
-    included_segment_fields: List[str]
     json_schema: Dict[str, Any]
 
 
@@ -401,7 +400,7 @@ class SegmentRunResult(BaseModel):
 
 
 class PromptRunVideoResult(BaseModel):
-    """Video/audio-level synthesis result for a single media item in a run."""
+    """Grounded video/audio-level extraction result for a single media item in a run."""
 
     result_type: Literal["video"] = "video"
     result_id: Optional[str] = None
@@ -420,11 +419,9 @@ class PromptRunVideoResult(BaseModel):
     schema_used: Optional[str] = None
     successful_segment_count: int = 0
     failed_segment_count: int = 0
-    omitted_segment_ids: List[str] = Field(default_factory=list)
-    template_fields: List[str] = Field(default_factory=list)
     source_fingerprint: Optional[str] = None
-    rendered_prompt_char_count: int = 0
-    llm_attempted: bool = False
+    embedding_status: Optional[str] = None
+    embedding_error: Optional[str] = None
     attempt_id: Optional[str] = None
     error_message: Optional[str] = None
     started_at: Optional[str] = None
@@ -704,26 +701,81 @@ class ImportJobProgress(BaseModel):
     skipped: int = 0
     bytes_transferred: int = 0
     current_file: Optional[str] = None
+    parts_total: int = 0
+    parts_completed: int = 0
+    parts_failed: int = 0
+
+
+class ImportOutput(BaseModel):
+    """One ordered independently owned output in an ingestion manifest."""
+
+    file_id: str
+    file_name: str
+    source_ordinal: int
+    part_index: int
+    part_count: int
+    source_start_seconds: float
+    source_end_seconds: float
+    video_id: str
+    title: str
+    status: str
+
+
+class ImportOutputsPage(BaseModel):
+    items: List[ImportOutput] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+    total: int = 0
+
+
+class ImportSourceFile(BaseModel):
+    """One original source and its durable ingestion outcome."""
+
+    file_id: str
+    file_name: str
+    source_ordinal: int
+    status: str
+    part_count: Optional[int] = None
+    parts_completed: Optional[int] = None
+    parts_failed: Optional[int] = None
+    failure: Optional[Dict[str, Any]] = None
+    skip_reason: Optional[str] = None
+
+
+class ImportFilesPage(BaseModel):
+    items: List[ImportSourceFile] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+    total: int = 0
+
+
+class ImportExecution(BaseModel):
+    status: Literal["not_requested", "pending", "submitted", "blocked"] = "not_requested"
+    run_id: Optional[str] = None
+    error_code: Optional[str] = None
+    error: Optional[str] = None
 
 
 class ImportJob(BaseModel):
-    """Import job representation."""
+    """Asynchronous ingestion; video_ids contains ready outputs on this page only."""
 
     job_id: str
-    connector_id: str
-    target_index_id: str
-    source_prefix: str
+    status: str
+    phase: Optional[str] = None
+    source_kind: str = "connector"
+    connector_id: Optional[str] = None
+    target_index_id: Optional[str] = None
+    source_prefix: str = ""
     file_pattern: str = "*"
     recursive: bool = True
-    status: str
     created_at: Optional[str] = None
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     error_message: Optional[str] = None
     progress: ImportJobProgress
+    outputs: ImportOutputsPage = Field(default_factory=ImportOutputsPage)
+    execution: ImportExecution = Field(default_factory=ImportExecution)
     video_ids: List[str] = Field(default_factory=list)
-    failed_files: List[Dict[str, str]] = Field(default_factory=list)
-    skipped_files: List[Dict[str, str]] = Field(default_factory=list)
+    failed_files: List[Dict[str, Any]] = Field(default_factory=list)
+    failed_files_next_cursor: Optional[str] = None
 
 
 class ApiKey(BaseModel):
@@ -751,21 +803,6 @@ class SignedUrl(BaseModel):
 
     signed_url: str
     expires_at: str
-
-
-class UploadResult(BaseModel):
-    """Result of video upload."""
-
-    video_id: str
-    title: str
-    video_uri: str
-    status: str
-    message: str
-    media_type: str = "video"
-    duration_seconds: Optional[float] = None
-    thumbnail_gcs_uri: Optional[str] = None
-    thumbnail_uri: Optional[str] = None
-    thumbnail_available: bool = False
 
 
 # =============================================================================
@@ -965,10 +1002,9 @@ class ExecutePromptTarget(TypedDict, total=False):
 
 
 class PromptVideoLevelConfigInput(TypedDict):
-    """Input payload for prompt video-level synthesis settings."""
+    """Input payload for prompt grounded video-level extraction settings."""
 
     instructions_text: str
-    included_segment_fields: List[str]
     json_schema: Dict[str, Any]
 
 
@@ -1135,22 +1171,6 @@ class FilterSearchResponse(BaseModel):
 # =============================================================================
 # Simplified Workflow Response Models
 # =============================================================================
-
-
-class WorkflowDestination(BaseModel):
-    """Resolved upload destination in the simplified workflow."""
-
-    type: Literal["playground", "index"]
-    index_id: Optional[str] = None
-    index_name: Optional[str] = None
-    index_created: bool = False
-
-
-class WorkflowUploadResponse(BaseModel):
-    """Uploaded media plus its resolved consumer destination."""
-
-    video: UploadResult
-    destination: WorkflowDestination
 
 
 class WorkflowPromptDefinition(BaseModel):

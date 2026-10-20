@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import math
 import re
 import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, Tuple
+from uuid import uuid4
 
 import httpx
 
@@ -27,6 +29,9 @@ from ._exceptions import (
     _raise_for_status,
 )
 from ._version import __version__
+
+_logger = logging.getLogger(__name__)
+ProcessingIntent = Literal["upload_media", "process_media", "find", "retry_prompt_run_segment"]
 
 _DEFAULT_RETRY_AFTER_SECONDS = 60
 _MAX_OAUTH_ACCESS_TOKEN_LENGTH = 16_384
@@ -217,6 +222,7 @@ class SyncHttpClient:
         files: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, str]] = None,
         idempotency_key: Optional[str] = None,
+        timeout: Optional[float] = None,
     ) -> Any:
         """Execute HTTP request with retry logic."""
         normalized_method = method.upper()
@@ -275,6 +281,7 @@ class SyncHttpClient:
                         data=data if multipart_content is None else None,
                         files=files if multipart_content is None else None,
                         content=multipart_content,
+                        timeout=timeout if timeout is not None else httpx.USE_CLIENT_DEFAULT,
                         headers=attempt_headers if attempt_headers else None,
                     )
                 finally:
@@ -413,6 +420,40 @@ class SyncHttpClient:
         if stream_error is not None:
             raise stream_error
 
+    def record_processing_activity(
+        self,
+        *,
+        reason: Literal["authentication", "processing_intent"],
+        operation: Optional[ProcessingIntent] = None,
+        event_id: Optional[str] = None,
+        raise_auth_errors: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """One explicit, authenticated control request; never a polling heartbeat."""
+        payload: Dict[str, Any] = {
+            "event_id": event_id or str(uuid4()),
+            "surface": "sdk",
+            "reason": reason,
+        }
+        if operation is not None:
+            payload["operation"] = operation
+        try:
+            result = self._request(
+                "POST",
+                "/auth/processing-activity",
+                json=payload,
+                timeout=min(self._config.timeout, 3.0),
+            )
+            return result if isinstance(result, dict) else None
+        except VideoVectorError as error:
+            if raise_auth_errors and (
+                isinstance(error, AuthenticationError) or error.status_code in (401, 403)
+            ):
+                raise
+            _logger.warning(
+                "Processing readiness unavailable; continuing without a readiness acknowledgement."
+            )
+            return None
+
     def post(
         self,
         endpoint: str,
@@ -423,8 +464,11 @@ class SyncHttpClient:
         params: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, str]] = None,
         idempotency_key: Optional[str] = None,
+        processing_intent: Optional[ProcessingIntent] = None,
     ) -> Any:
-        """Execute POST request."""
+        """Execute POST request; explicit resource intent warms before media transfer."""
+        if processing_intent is not None:
+            self.record_processing_activity(reason="processing_intent", operation=processing_intent)
         return self._request(
             "POST",
             endpoint,
@@ -524,6 +568,7 @@ class AsyncHttpClient:
         files: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, str]] = None,
         idempotency_key: Optional[str] = None,
+        timeout: Optional[float] = None,
     ) -> Any:
         """Execute HTTP request with retry logic."""
         normalized_method = method.upper()
@@ -580,6 +625,7 @@ class AsyncHttpClient:
                         data=data if multipart_content is None else None,
                         files=files if multipart_content is None else None,
                         content=multipart_content,
+                        timeout=timeout if timeout is not None else httpx.USE_CLIENT_DEFAULT,
                         headers=attempt_headers if attempt_headers else None,
                     )
                 finally:
@@ -718,6 +764,40 @@ class AsyncHttpClient:
         if stream_error is not None:
             raise stream_error
 
+    async def record_processing_activity(
+        self,
+        *,
+        reason: Literal["authentication", "processing_intent"],
+        operation: Optional[ProcessingIntent] = None,
+        event_id: Optional[str] = None,
+        raise_auth_errors: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """One explicit, authenticated control request; never a polling heartbeat."""
+        payload: Dict[str, Any] = {
+            "event_id": event_id or str(uuid4()),
+            "surface": "sdk",
+            "reason": reason,
+        }
+        if operation is not None:
+            payload["operation"] = operation
+        try:
+            result = await self._request(
+                "POST",
+                "/auth/processing-activity",
+                json=payload,
+                timeout=min(self._config.timeout, 3.0),
+            )
+            return result if isinstance(result, dict) else None
+        except VideoVectorError as error:
+            if raise_auth_errors and (
+                isinstance(error, AuthenticationError) or error.status_code in (401, 403)
+            ):
+                raise
+            _logger.warning(
+                "Processing readiness unavailable; continuing without a readiness acknowledgement."
+            )
+            return None
+
     async def post(
         self,
         endpoint: str,
@@ -728,8 +808,13 @@ class AsyncHttpClient:
         params: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, str]] = None,
         idempotency_key: Optional[str] = None,
+        processing_intent: Optional[ProcessingIntent] = None,
     ) -> Any:
-        """Execute POST request."""
+        """Execute POST request; explicit resource intent warms before media transfer."""
+        if processing_intent is not None:
+            await self.record_processing_activity(
+                reason="processing_intent", operation=processing_intent
+            )
         return await self._request(
             "POST",
             endpoint,

@@ -349,11 +349,8 @@ def _prompt_run_video_result_payload() -> dict[str, Any]:
         "schema_used": '{"type":"object"}',
         "successful_segment_count": 8,
         "failed_segment_count": 2,
-        "omitted_segment_ids": ["seg_9"],
-        "template_fields": ["summary"],
-        "source_fingerprint": "fp_1",
-        "rendered_prompt_char_count": 1200,
-        "llm_attempted": True,
+        "source_fingerprint": "source-and-prompt-fingerprint",
+        "embedding_status": "searchable",
         "attempt_id": "attempt_1",
         "error_message": None,
         "started_at": "2026-01-01T00:00:00Z",
@@ -578,6 +575,7 @@ class _FakeSyncHttp:
         params: Optional[dict[str, Any]] = None,
         headers: Optional[dict[str, str]] = None,
         idempotency_key: Optional[str] = None,
+        processing_intent: Optional[str] = None,
     ) -> Any:
         self.calls.append(
             {
@@ -588,6 +586,7 @@ class _FakeSyncHttp:
                 "files": files,
                 "params": params,
                 "idempotency_key": idempotency_key,
+                **({"processing_intent": processing_intent} if processing_intent else {}),
             }
         )
         return self.responses[("POST", endpoint)]
@@ -671,6 +670,7 @@ class _FakeAsyncHttp(_FakeSyncHttp):
         params: Optional[dict[str, Any]] = None,
         headers: Optional[dict[str, str]] = None,
         idempotency_key: Optional[str] = None,
+        processing_intent: Optional[str] = None,
     ) -> Any:
         return super().post(
             endpoint,
@@ -680,6 +680,7 @@ class _FakeAsyncHttp(_FakeSyncHttp):
             params=params,
             headers=headers,
             idempotency_key=idempotency_key,
+            processing_intent=processing_intent,
         )
 
     async def delete(
@@ -982,7 +983,8 @@ def test_prompt_runs_resource_sync() -> None:
     assert llm_calls[0].llm_call_id == "llm_1"
 
     video_result = resource.get_video_result("run_1", "video_1")
-    assert video_result.llm_attempted is True
+    assert video_result.source_fingerprint == "source-and-prompt-fingerprint"
+    assert video_result.embedding_status == "searchable"
     assert video_result.segment_uri == ("https://api.example.com/media/segment?token=segment")
     assert video_result.gcs_uri == "gs://bucket/segments/seg_1.mp4"
     assert video_result.thumbnail_gcs_uri == "gs://bucket/thumbnails/seg_1.jpg"
@@ -1000,6 +1002,7 @@ def test_prompt_runs_resource_sync() -> None:
     assert retry.retry_id == "retry_1"
     assert retry.billing_status == "pending"
     assert http.calls[8]["idempotency_key"] == "retry-key-1"
+    assert http.calls[8]["processing_intent"] == "retry_prompt_run_segment"
 
     retry_status = resource.get_segment_retry_status("run_1", "video_1", "seg_2", "retry_1")
     assert retry_status.field_extraction_succeeded is True
@@ -1080,6 +1083,7 @@ def test_prompt_runs_resource_async() -> None:
         assert retry.status == "pending"
         assert retry.billing_status == "pending"
         assert http.calls[8]["idempotency_key"].startswith("prompt-run-segment-retry:")
+        assert http.calls[8]["processing_intent"] == "retry_prompt_run_segment"
 
         retry_status = await resource.get_segment_retry_status(
             "run_1", "video_1", "seg_2", "retry_1"
@@ -1185,10 +1189,8 @@ def test_videos_prompt_runs_and_playground_sync() -> None:
     assert page.data[0].processing_status[0].video_level.attempt_id == "attempt_1"
 
 
-def test_videos_create_sync_adds_optional_source_connector_without_breaking_legacy_payload() -> (
-    None
-):
-    http = _FakeSyncHttp({("POST", "/videos"): _video_payload()})
+def test_videos_create_sync_returns_import_job_with_optional_source_connector() -> None:
+    http = _FakeSyncHttp({("POST", "/videos"): _import_job_payload()})
     resource = VideosResource(http)  # type: ignore[arg-type]
 
     resource.create(title="Demo", video_uri="gs://bucket/demo.mp4", index_id="idx_1")
@@ -1255,10 +1257,8 @@ def test_videos_prompt_runs_and_playground_async() -> None:
     asyncio.run(_run())
 
 
-def test_videos_create_async_adds_optional_source_connector_without_breaking_legacy_payload() -> (
-    None
-):
-    http = _FakeAsyncHttp({("POST", "/videos"): _video_payload()})
+def test_videos_create_async_returns_import_job_with_optional_source_connector() -> None:
+    http = _FakeAsyncHttp({("POST", "/videos"): _import_job_payload()})
     resource = AsyncVideosResource(http)  # type: ignore[arg-type]
 
     async def _run() -> None:

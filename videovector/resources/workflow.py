@@ -21,19 +21,19 @@ from uuid import uuid4
 
 from .._exceptions import ProcessingError, TimeoutError
 from .._types import (
+    ImportJob,
     PromptRun,
     SearchResult,
     WorkflowDefineResponse,
     WorkflowProcessResponse,
     WorkflowSearchResponse,
-    WorkflowUploadResponse,
 )
 
 if TYPE_CHECKING:
     from .._http import AsyncHttpClient, SyncHttpClient
 
 
-SegmentationMode = Literal["smart", "content_aware", "fixed"]
+SegmentationMode = Literal["content_aware", "fixed"]
 ResultLevel = Literal["segment", "video"]
 MediaInput = Union[str, Path, BinaryIO]
 
@@ -50,13 +50,13 @@ def _validate_process_options(
     *,
     prompt_id: Optional[str],
     prompt_instruction: Optional[str],
-    segmentation_mode: SegmentationMode,
+    segmentation_mode: Optional[SegmentationMode],
     fixed_segment_duration_seconds: Optional[int],
 ) -> None:
     if bool((prompt_id or "").strip()) == bool((prompt_instruction or "").strip()):
         raise ValueError("Exactly one of prompt_id or prompt_instruction is required")
-    if segmentation_mode not in {"smart", "content_aware", "fixed"}:
-        raise ValueError("segmentation_mode must be smart, content_aware, or fixed")
+    if segmentation_mode not in {None, "content_aware", "fixed"}:
+        raise ValueError("segmentation_mode must be content_aware or fixed")
     if fixed_segment_duration_seconds is not None and (
         isinstance(fixed_segment_duration_seconds, bool)
         or not isinstance(fixed_segment_duration_seconds, int)
@@ -73,13 +73,14 @@ def _process_body(
     *,
     prompt_id: Optional[str],
     prompt_instruction: Optional[str],
+    import_job_id: Optional[str],
     video_ids: Optional[Union[str, List[str]]],
     index_id: Optional[str],
     index_name: Optional[str],
-    segmentation_mode: SegmentationMode,
+    segmentation_mode: Optional[SegmentationMode],
     fixed_segment_duration_seconds: Optional[int],
-    advanced_transcription: bool,
-    create_image_embeddings: bool,
+    advanced_transcription: Optional[bool],
+    create_image_embeddings: Optional[bool],
 ) -> Dict[str, Any]:
     _validate_process_options(
         prompt_id=prompt_id,
@@ -87,12 +88,16 @@ def _process_body(
         segmentation_mode=segmentation_mode,
         fixed_segment_duration_seconds=fixed_segment_duration_seconds,
     )
-    body: Dict[str, Any] = {
+    if import_job_id is not None and any(
+        value is not None for value in (video_ids, index_id, index_name)
+    ):
+        raise ValueError("import_job_id cannot be combined with another processing target")
+    body: Dict[str, Any] = {}
+    for key, value in {
         "segmentation_mode": segmentation_mode,
         "advanced_transcription": advanced_transcription,
         "create_image_embeddings": create_image_embeddings,
-    }
-    for key, value in {
+        "import_job_id": import_job_id,
         "prompt_id": prompt_id,
         "prompt_instruction": prompt_instruction,
         "video_ids": video_ids,
@@ -269,7 +274,7 @@ class WorkflowResource:
         index_id: Optional[str] = None,
         index_name: Optional[str] = None,
         idempotency_key: Optional[str] = None,
-    ) -> WorkflowUploadResponse:
+    ) -> ImportJob:
         data = {
             key: value
             for key, value in {
@@ -285,6 +290,7 @@ class WorkflowResource:
             with path.open("rb") as stream:
                 response = self._client.post(
                     "/workflow/upload",
+                    processing_intent="upload_media",
                     data=data,
                     files={"file": (path.name, stream)},
                     idempotency_key=key,
@@ -293,11 +299,12 @@ class WorkflowResource:
             filename = Path(str(getattr(file, "name", "upload"))).name
             response = self._client.post(
                 "/workflow/upload",
+                processing_intent="upload_media",
                 data=data,
                 files={"file": (filename, file)},
                 idempotency_key=key,
             )
-        return WorkflowUploadResponse.model_validate(response)
+        return ImportJob.model_validate(response)
 
     def define(
         self,
@@ -318,20 +325,23 @@ class WorkflowResource:
         *,
         prompt_id: Optional[str] = None,
         prompt_instruction: Optional[str] = None,
+        import_job_id: Optional[str] = None,
         video_ids: Optional[Union[str, List[str]]] = None,
         index_id: Optional[str] = None,
         index_name: Optional[str] = None,
-        segmentation_mode: SegmentationMode = "smart",
+        segmentation_mode: Optional[SegmentationMode] = None,
         fixed_segment_duration_seconds: Optional[int] = None,
-        advanced_transcription: bool = False,
-        create_image_embeddings: bool = False,
+        advanced_transcription: Optional[bool] = None,
+        create_image_embeddings: Optional[bool] = None,
         idempotency_key: Optional[str] = None,
     ) -> WorkflowProcessResponse:
         response = self._client.post(
             "/workflow/process",
+            processing_intent="process_media",
             json=_process_body(
                 prompt_id=prompt_id,
                 prompt_instruction=prompt_instruction,
+                import_job_id=import_job_id,
                 video_ids=video_ids,
                 index_id=index_id,
                 index_name=index_name,
@@ -429,7 +439,7 @@ class AsyncWorkflowResource:
         index_id: Optional[str] = None,
         index_name: Optional[str] = None,
         idempotency_key: Optional[str] = None,
-    ) -> WorkflowUploadResponse:
+    ) -> ImportJob:
         data = {
             key: value
             for key, value in {
@@ -445,6 +455,7 @@ class AsyncWorkflowResource:
             with path.open("rb") as stream:
                 response = await self._client.post(
                     "/workflow/upload",
+                    processing_intent="upload_media",
                     data=data,
                     files={"file": (path.name, stream)},
                     idempotency_key=key,
@@ -453,11 +464,12 @@ class AsyncWorkflowResource:
             filename = Path(str(getattr(file, "name", "upload"))).name
             response = await self._client.post(
                 "/workflow/upload",
+                processing_intent="upload_media",
                 data=data,
                 files={"file": (filename, file)},
                 idempotency_key=key,
             )
-        return WorkflowUploadResponse.model_validate(response)
+        return ImportJob.model_validate(response)
 
     async def define(
         self,
@@ -478,20 +490,23 @@ class AsyncWorkflowResource:
         *,
         prompt_id: Optional[str] = None,
         prompt_instruction: Optional[str] = None,
+        import_job_id: Optional[str] = None,
         video_ids: Optional[Union[str, List[str]]] = None,
         index_id: Optional[str] = None,
         index_name: Optional[str] = None,
-        segmentation_mode: SegmentationMode = "smart",
+        segmentation_mode: Optional[SegmentationMode] = None,
         fixed_segment_duration_seconds: Optional[int] = None,
-        advanced_transcription: bool = False,
-        create_image_embeddings: bool = False,
+        advanced_transcription: Optional[bool] = None,
+        create_image_embeddings: Optional[bool] = None,
         idempotency_key: Optional[str] = None,
     ) -> WorkflowProcessResponse:
         response = await self._client.post(
             "/workflow/process",
+            processing_intent="process_media",
             json=_process_body(
                 prompt_id=prompt_id,
                 prompt_instruction=prompt_instruction,
+                import_job_id=import_job_id,
                 video_ids=video_ids,
                 index_id=index_id,
                 index_name=index_name,

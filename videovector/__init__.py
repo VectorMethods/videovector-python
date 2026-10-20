@@ -112,9 +112,14 @@ from ._types import (
     FilterCondition,
     FilterSearchResponse,
     ImageSearchResult,
+    ImportExecution,
+    ImportFilesPage,
     ImportJob,
     ImportJobProgress,
     ImportJobStatus,
+    ImportOutput,
+    ImportOutputsPage,
+    ImportSourceFile,
     Index,
     IndexDeletionResponse,
     LlmCall,
@@ -150,7 +155,6 @@ from ._types import (
     SignedUrl,
     TestConnectionResult,
     TestSchemaResponse,
-    UploadResult,
     UsageBreakdown,
     UsageDetail,
     UsageHistory,
@@ -169,12 +173,10 @@ from ._types import (
     WebhookTestResponse,
     WebhookWithSecret,
     WorkflowDefineResponse,
-    WorkflowDestination,
     WorkflowPagination,
     WorkflowProcessResponse,
     WorkflowPromptDefinition,
     WorkflowSearchResponse,
-    WorkflowUploadResponse,
 )
 from ._version import __version__
 
@@ -244,6 +246,11 @@ __all__ = [
     # Types - Import
     "ImportJob",
     "ImportJobProgress",
+    "ImportOutput",
+    "ImportOutputsPage",
+    "ImportFilesPage",
+    "ImportSourceFile",
+    "ImportExecution",
     # Types - Exports
     "Export",
     "ExportCreateResult",
@@ -259,9 +266,6 @@ __all__ = [
     "ApiKeyWithSecret",
     # Types - Utilities
     "SignedUrl",
-    "UploadResult",
-    "WorkflowUploadResponse",
-    "WorkflowDestination",
     "WorkflowPromptDefinition",
     "WorkflowDefineResponse",
     "WorkflowProcessResponse",

@@ -24,23 +24,28 @@ import os
 from videovector import VideoVector
 
 with VideoVector(api_key=os.environ["VIDEO_VECTOR_API_KEY"]) as client:
+    readiness = client.authenticate()
     upload = client.workflow.upload(
         file="/path/to/video.mp4",
         index_name="Field Review Clips",
     )
+
+    client.import_jobs.wait_for_completion(upload.job_id)
+    for part in client.import_jobs.iter_outputs(upload.job_id):
+        print(part.part_index + 1, part.part_count, part.video_id)
 
     prompt = client.workflow.define(
         "Extract products, sentiment, and visible brand names"
     )
     run = client.workflow.process(
         prompt_id=prompt.prompt_id,
-        video_ids=[upload.video.video_id],
+        import_job_id=upload.job_id,
     )
     client.workflow.wait_until_searchable(run.run.run_id)
 
     results = client.workflow.search(
         query="employee restocking shelves near checkout",
-        video_ids=[upload.video.video_id],
+        prompt_run_ids=[run.run.run_id],
         limit=10,
     )
 
@@ -48,7 +53,23 @@ with VideoVector(api_key=os.environ["VIDEO_VECTOR_API_KEY"]) as client:
         print(result.video_id, result.start_time, result.similarity_score)
 ```
 
+Uploads return an asynchronous import job. Videos longer than 40 minutes become
+the minimum number of independent parts, each at most 40 minutes. Every part has
+its own ID, playable media, segments, and visually grounded video result. The same
+content-aware Gemini call produces segment and video-level metadata; fixed mode
+is segment-only. Audio retains the two-hour duration limit. There is no cross-part
+consolidation. `iter_outputs()` follows every manifest page; `import_job_id` processes
+the entire completed manifest without sending a bounded list of video IDs.
+
 ## Configuration
+
+`authenticate()` explicitly validates the configured credential and requests
+API/processing readiness before your first media call. Async clients use
+`await client.authenticate()`. Readiness is advisory: a returned acknowledgement
+does not assert completed startup, and `None` means readiness was unavailable.
+Invalid credentials still raise an authentication/authorization error. Uploads
+and processing submissions also signal intent automatically; polling and token
+refresh do not. See [authentication](docs/authentication.md) for the contract.
 
 The SDK reads credentials and operational settings from constructor arguments or environment variables.
 
@@ -137,7 +158,7 @@ token.
 - `client.workflow`: simplified upload, prompt definition, processing, stable search pagination, and searchable-run polling.
 - `client.videos`: upload, retrieve, process, segments, batch helpers, and playground media.
 - `client.indexes`: index CRUD, paginated index videos, and prompt-run history.
-- `client.prompts`: prompt CRUD, schema validation, usage, video-level synthesis, and semantic indexing config.
+- `client.prompts`: prompt CRUD, schema validation, usage, grounded video-level extraction, and semantic indexing config.
 - `client.prompt_runs`: estimate, execute, poll, retrieve results, inspect failures, retry failed segments, and inspect LLM calls.
 - `client.search`: text, image, multimodal, filter, multi-run, and playground search.
 - `client.connectors`: GCS, S3, and Azure connector creation, testing, browsing, and deletion.
@@ -272,7 +293,7 @@ The [examples](examples) directory contains runnable, environment-driven example
 - quickstart upload/search
 - sync and async client usage
 - custom prompt and schema design
-- video-level synthesis
+- grounded video-level extraction
 - text, image, multimodal, and filter search
 - GCS, S3, and Azure connectors
 - run-scoped batch segment retrieval and bounded playback grants
@@ -316,3 +337,5 @@ Use the REST API directly for unsupported public helper routes, and use the sepa
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+Use `client.import_jobs.iter_files(job_id, failed_only=True)` to inspect every failed source before refreshing descriptors and retrying. `failed_files_next_cursor` on the job identifies further failure pages; `files()` also returns skipped source reasons when `failed_only=False`.

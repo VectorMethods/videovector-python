@@ -29,7 +29,6 @@ def main() -> None:
                     "Create a concise executive brief from the extracted segment evidence. "
                     "Include decisions, risks, owners, and unresolved questions."
                 ),
-                "included_segment_fields": ["decision_points", "risks", "follow_ups"],
                 "json_schema": {
                     "type": "object",
                     "properties": {

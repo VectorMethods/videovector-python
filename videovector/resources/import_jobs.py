@@ -6,10 +6,10 @@ Provides methods for bulk importing videos from cloud storage.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, List, Optional
 from uuid import uuid4
 
-from .._types import ImportJob
+from .._types import ImportFilesPage, ImportJob, ImportOutput, ImportOutputsPage, ImportSourceFile
 
 if TYPE_CHECKING:
     from .._http import AsyncHttpClient, SyncHttpClient
@@ -109,7 +109,76 @@ class ImportJobsResource:
         Raises:
             NotFoundError: If job doesn't exist
         """
-        response = self._client.get(f"/import-jobs/{job_id}")
+        response = self._client.get(
+            f"/import-jobs/{job_id}",
+        )
+        return ImportJob.model_validate(response)
+
+    def outputs(
+        self, job_id: str, *, limit: int = 100, cursor: Optional[str] = None
+    ) -> ImportOutputsPage:
+        """Read ordered outputs, including pending and failed parts."""
+        response = self._client.get(
+            f"/import-jobs/{job_id}/outputs",
+            params={
+                "limit": limit,
+                **({"cursor": cursor} if cursor else {}),
+            },
+        )
+        return ImportOutputsPage.model_validate(response)
+
+    def iter_outputs(self, job_id: str) -> Iterator[ImportOutput]:
+        """Enumerate the complete manifest without a 100-output cap."""
+        cursor = None
+        while True:
+            page = self.outputs(job_id, cursor=cursor)
+            yield from page.items
+            if page.next_cursor is None:
+                return
+            cursor = page.next_cursor
+
+    def files(
+        self,
+        job_id: str,
+        *,
+        limit: int = 100,
+        cursor: Optional[str] = None,
+        failed_only: bool = False,
+    ) -> ImportFilesPage:
+        """Inspect source outcomes, including safe failure details for retry."""
+        response = self._client.get(
+            f"/import-jobs/{job_id}/files",
+            params={
+                "limit": limit,
+                "failed_only": failed_only,
+                **({"cursor": cursor} if cursor else {}),
+            },
+        )
+        return ImportFilesPage.model_validate(response)
+
+    def iter_files(self, job_id: str, *, failed_only: bool = False) -> Iterator[ImportSourceFile]:
+        """Enumerate every source or every failed source without truncation."""
+        cursor = None
+        while True:
+            page = self.files(job_id, cursor=cursor, failed_only=failed_only)
+            yield from page.items
+            if page.next_cursor is None:
+                return
+            cursor = page.next_cursor
+
+    def retry(
+        self,
+        job_id: str,
+        *,
+        files: Optional[List[Dict[str, Any]]] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> ImportJob:
+        """Resume unfinished parts; optionally refresh expired source descriptors."""
+        response = self._client.post(
+            f"/import-jobs/{job_id}/retry",
+            json={"files": files} if files is not None else None,
+            idempotency_key=_resolve_import_job_idempotency_key("retry", idempotency_key),
+        )
         return ImportJob.model_validate(response)
 
     def list(self, *, status: Optional[str] = None) -> List[ImportJob]:
@@ -244,7 +313,78 @@ class AsyncImportJobsResource:
 
     async def retrieve(self, job_id: str) -> ImportJob:
         """Retrieve an import job by ID."""
-        response = await self._client.get(f"/import-jobs/{job_id}")
+        response = await self._client.get(
+            f"/import-jobs/{job_id}",
+        )
+        return ImportJob.model_validate(response)
+
+    async def outputs(
+        self, job_id: str, *, limit: int = 100, cursor: Optional[str] = None
+    ) -> ImportOutputsPage:
+        """Read one ordered manifest page."""
+        response = await self._client.get(
+            f"/import-jobs/{job_id}/outputs",
+            params={
+                "limit": limit,
+                **({"cursor": cursor} if cursor else {}),
+            },
+        )
+        return ImportOutputsPage.model_validate(response)
+
+    async def iter_outputs(self, job_id: str) -> AsyncIterator[ImportOutput]:
+        cursor = None
+        while True:
+            page = await self.outputs(job_id, cursor=cursor)
+            for item in page.items:
+                yield item
+            if page.next_cursor is None:
+                return
+            cursor = page.next_cursor
+
+    async def files(
+        self,
+        job_id: str,
+        *,
+        limit: int = 100,
+        cursor: Optional[str] = None,
+        failed_only: bool = False,
+    ) -> ImportFilesPage:
+        """Inspect source outcomes, including safe failure details for retry."""
+        response = await self._client.get(
+            f"/import-jobs/{job_id}/files",
+            params={
+                "limit": limit,
+                "failed_only": failed_only,
+                **({"cursor": cursor} if cursor else {}),
+            },
+        )
+        return ImportFilesPage.model_validate(response)
+
+    async def iter_files(
+        self, job_id: str, *, failed_only: bool = False
+    ) -> AsyncIterator[ImportSourceFile]:
+        """Enumerate every source or every failed source without truncation."""
+        cursor = None
+        while True:
+            page = await self.files(job_id, cursor=cursor, failed_only=failed_only)
+            for item in page.items:
+                yield item
+            if page.next_cursor is None:
+                return
+            cursor = page.next_cursor
+
+    async def retry(
+        self,
+        job_id: str,
+        *,
+        files: Optional[List[Dict[str, Any]]] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> ImportJob:
+        response = await self._client.post(
+            f"/import-jobs/{job_id}/retry",
+            json={"files": files} if files is not None else None,
+            idempotency_key=_resolve_import_job_idempotency_key("retry", idempotency_key),
+        )
         return ImportJob.model_validate(response)
 
     async def list(self, *, status: Optional[str] = None) -> List[ImportJob]:
