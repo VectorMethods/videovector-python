@@ -16,14 +16,17 @@ This document maps the Python SDK surface (`videovector`) to backend API endpoin
 
 | SDK Method | HTTP | Endpoint | Response Model | Backend Auth Requirement |
 |---|---|---|---|---|
-| `workflow.upload` | `POST` | `/workflow/upload` | `WorkflowUploadResponse` | `write` |
+| `workflow.upload` / `videos.upload` local path, `workflow.upload_files` | `POST` + scoped storage `PUT` | `/workflow/attachments` and native resumable sessions | `ImportJob` | `write` then scoped upload capability |
+| `workflow.upload` / `videos.upload` file object | `POST` | `/workflow/upload` | `ImportJob` | `write` |
+| `workflow.import_urls` | `POST` | `/workflow/attachments` | `ImportJob` | `write` |
+| `workflow.analyze` | `POST` | `/workflow/analyses` | `AnalysisResponse` | `write` |
+| `workflow.get_analysis` | `GET` | `/workflow/analyses/{analysis_id}` | `AnalysisResponse` | `read` |
 | `workflow.define` | `POST` | `/workflow/define` | `WorkflowDefineResponse` | `write` |
 | `workflow.process` | `POST` | `/workflow/process` | `WorkflowProcessResponse` | `write` |
 | `workflow.search` | `POST` | `/workflow/search` | `WorkflowSearchResponse` | `search` |
 | `workflow.search` continuation | `GET` | `/workflow/search/page` | `WorkflowSearchResponse` | `search` |
 | `workflow.wait_until_searchable` | `GET` polling | `/prompt-runs/{run_id}` | `PromptRun` | `read` |
-| `videos.create` | `POST` | `/videos` | `Video` | `write` (optional `source_connector_id` for a caller-owned private GCS import connector) |
-| `videos.upload` | `POST` | `/videos/upload` | `UploadResult` | `write` |
+| `videos.create` | `POST` | `/videos` | `ImportJob` | `write` (optional `source_connector_id` for a caller-owned private GCS import connector) |
 | `videos.retrieve` | `GET` | `/videos/{video_id}` | `Video` | `read` |
 | `videos.delete` | `DELETE` | `/videos/{video_id}` | `VideoDeletionResponse` | `admin` |
 | `videos.get_deletion` | `GET` | `/videos/{video_id}/deletion` | `VideoDeletionResponse` | `admin` |

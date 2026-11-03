@@ -11,6 +11,7 @@ import pytest
 from videovector._config import ClientConfig
 from videovector._exceptions import VideoVectorError
 from videovector._http import AsyncHttpClient, SyncHttpClient
+from videovector.resources.videos import AsyncVideosResource, VideosResource
 from videovector.resources.workflow import AsyncWorkflowResource, WorkflowResource
 
 BASE = "https://api.example/api/v2"
@@ -202,3 +203,59 @@ def test_single_path_upload_uses_native_storage_without_multipart(tmp_path, as_s
     assert requests[0][0].headers["idempotency-key"] == "same"
     assert len([request for request, _ in requests if str(request.url) == JOB + "/complete"]) == 1
     assert all(request.url.path != "/api/v2/workflow/upload" for request, _ in requests)
+
+
+@pytest.mark.parametrize("as_string", [False, True])
+def test_videos_path_upload_reuses_native_workflow(tmp_path, as_string):
+    backend = Backend()
+    client = SyncHttpClient(config())
+    client._client.close()
+    client._client = httpx.Client(
+        base_url=BASE, headers=client._default_headers(), transport=httpx.MockTransport(backend)
+    )
+    path = files(tmp_path)[0]
+    try:
+        result = VideosResource(client).upload(
+            file=str(path) if as_string else path,
+            title="Clip",
+            index_id="idx",
+            idempotency_key="same",
+        )
+    finally:
+        client.close()
+    assert result.job_id == "job_1"
+    assert json.loads(backend.requests[0][1]) == {"title": "Clip", "index_id": "idx"}
+    assert backend.requests[0][0].headers["idempotency-key"] == "same"
+    assert sum(str(request.url) == JOB + "/complete" for request, _ in backend.requests) == 1
+    assert all(
+        "multipart" not in request.headers.get("content-type", "")
+        for request, _ in backend.requests
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_videos_path_upload_reuses_native_workflow(tmp_path):
+    backend = Backend()
+
+    async def handle(request):
+        await request.aread()
+        return backend(request)
+
+    client = AsyncHttpClient(config())
+    client._client = httpx.AsyncClient(
+        base_url=BASE, headers=client._default_headers(), transport=httpx.MockTransport(handle)
+    )
+    try:
+        result = await AsyncVideosResource(client).upload(
+            file=files(tmp_path)[0], title="Clip", index_id="idx", idempotency_key="same"
+        )
+    finally:
+        await client.close()
+    assert result.job_id == "job_1"
+    assert json.loads(backend.requests[0][1]) == {"title": "Clip", "index_id": "idx"}
+    assert backend.requests[0][0].headers["idempotency-key"] == "same"
+    assert sum(str(request.url) == JOB + "/complete" for request, _ in backend.requests) == 1
+    assert all(
+        "multipart" not in request.headers.get("content-type", "")
+        for request, _ in backend.requests
+    )

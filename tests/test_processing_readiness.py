@@ -152,7 +152,7 @@ def test_polling_and_token_refresh_never_signal_activity(async_mode) -> None:
 
 
 CASES = [
-    ("videos.upload", "upload_media", "/videos/upload", {"file": None, "title": "video"}),
+    ("videos.upload", "upload_media", "/workflow/upload", {"file": None, "title": "video"}),
     ("workflow.upload", "upload_media", "/workflow/upload", {"file": None}),
     ("videos.process", "process_media", "/videos/v1/process", {"video_id": "v1"}),
     ("workflow.process", "process_media", "/workflow/process", {"prompt_id": "p1"}),
