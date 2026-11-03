@@ -15,6 +15,7 @@ import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, Tuple
+from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
 import httpx
@@ -192,6 +193,39 @@ def _default_headers_for_config(config: ClientConfig) -> Dict[str, str]:
     return headers
 
 
+def _validate_storage_upload_url(url: str) -> None:
+    parsed = urlsplit(url)
+    query = parse_qs(parsed.query)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "storage.googleapis.com"
+        or parsed.port not in (None, 443)
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+        or not parsed.path.startswith("/upload/storage/v1/")
+        or not query.get("upload_id")
+        or query.get("uploadType") != ["resumable"]
+    ):
+        raise ValueError("Invalid storage upload destination")
+
+
+def _capability_request(
+    config: ClientConfig,
+    url: str,
+    token: str,
+    *,
+    json: Optional[Dict[str, Any]] = None,
+    data: Optional[Dict[str, Any]] = None,
+    files: Optional[Dict[str, Any]] = None,
+) -> httpx.Request:
+    if not url.startswith(config.base_url.rstrip("/") + "/workflow/attachments/"):
+        raise ValueError("Invalid attachment upload destination")
+    return httpx.Request(
+        "POST", url, headers={"Authorization": f"Bearer {token}"}, json=json, data=data, files=files
+    )
+
+
 class SyncHttpClient:
     """Synchronous HTTP client for VideoVector API."""
 
@@ -340,6 +374,53 @@ class SyncHttpClient:
             raise attempt_error
 
         raise VideoVectorError("Request failed after max retries")
+
+    def attachment_request(
+        self,
+        url: str,
+        token: str,
+        *,
+        json: Optional[Dict[str, Any]] = None,
+        data: Optional[Dict[str, Any]] = None,
+        files: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        """Use only the scoped grant; never inherit account credentials."""
+        request = _capability_request(self._config, url, token, json=json, data=data, files=files)
+        try:
+            response = self._client.send(request, follow_redirects=False)
+            if not response.is_success:
+                _raise_for_status(
+                    response.status_code,
+                    {"message": "Attachment request was not confirmed; resume the same job"},
+                )
+            return response.json()
+        except httpx.RequestError:
+            raise ConnectionError(
+                "Attachment request was not confirmed; resume the same job"
+            ) from None
+
+    def upload_capability(
+        self, url: str, content: Any, size: int, content_range: str
+    ) -> Tuple[int, str]:
+        """Stream media directly to a native GCS capability without API authentication."""
+        _validate_storage_upload_url(url)
+        request = httpx.Request(
+            "PUT",
+            url,
+            headers={"Content-Length": str(size), "Content-Range": content_range},
+            content=content,
+        )
+        try:
+            response = self._client.send(request, follow_redirects=False)
+            if response.status_code not in (200, 201, 308):
+                raise VideoVectorError(
+                    "Storage upload was not confirmed; resume the same job",
+                    status_code=response.status_code,
+                    error_code="upload_transfer_failed",
+                )
+            return response.status_code, response.headers.get("Range", "")
+        except httpx.RequestError:
+            raise ConnectionError("Storage upload was not confirmed; resume the same job") from None
 
     def get(
         self,
@@ -683,6 +764,55 @@ class AsyncHttpClient:
             raise attempt_error
 
         raise VideoVectorError("Request failed after max retries")
+
+    async def attachment_request(
+        self,
+        url: str,
+        token: str,
+        *,
+        json: Optional[Dict[str, Any]] = None,
+        data: Optional[Dict[str, Any]] = None,
+        files: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        """Use only the scoped grant; never inherit account credentials."""
+        request = _capability_request(self._config, url, token, json=json, data=data, files=files)
+        try:
+            client = await self._ensure_client()
+            response = await client.send(request, follow_redirects=False)
+            if not response.is_success:
+                _raise_for_status(
+                    response.status_code,
+                    {"message": "Attachment request was not confirmed; resume the same job"},
+                )
+            return response.json()
+        except httpx.RequestError:
+            raise ConnectionError(
+                "Attachment request was not confirmed; resume the same job"
+            ) from None
+
+    async def upload_capability(
+        self, url: str, content: Any, size: int, content_range: str
+    ) -> Tuple[int, str]:
+        """Stream media directly to a native GCS capability without API authentication."""
+        _validate_storage_upload_url(url)
+        request = httpx.Request(
+            "PUT",
+            url,
+            headers={"Content-Length": str(size), "Content-Range": content_range},
+            content=content,
+        )
+        try:
+            client = await self._ensure_client()
+            response = await client.send(request, follow_redirects=False)
+            if response.status_code not in (200, 201, 308):
+                raise VideoVectorError(
+                    "Storage upload was not confirmed; resume the same job",
+                    status_code=response.status_code,
+                    error_code="upload_transfer_failed",
+                )
+            return response.status_code, response.headers.get("Range", "")
+        except httpx.RequestError:
+            raise ConnectionError("Storage upload was not confirmed; resume the same job") from None
 
     async def get(
         self,

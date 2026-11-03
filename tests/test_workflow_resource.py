@@ -195,12 +195,13 @@ def test_search_cursor_rejects_ignored_search_arguments() -> None:
         resource.search(cursor="  ")
 
 
-def test_upload_streams_path_and_generates_key(tmp_path: Path) -> None:
+def test_upload_preserves_binary_stream_and_generates_key(tmp_path: Path) -> None:
     source = tmp_path / "demo.mp4"
     source.write_bytes(b"video")
     http = CaptureSyncHttp()
 
-    response = WorkflowResource(http).upload(source)  # type: ignore[arg-type]
+    with source.open("rb") as stream:
+        response = WorkflowResource(http).upload(stream)  # type: ignore[arg-type]
 
     assert response.job_id == "job_1"
     assert response.status == "pending"
@@ -227,7 +228,8 @@ def test_async_workflow_surface_parity(tmp_path: Path) -> None:
         http = CaptureAsyncHttp()
         resource = AsyncWorkflowResource(http)  # type: ignore[arg-type]
 
-        uploaded = await resource.upload(source, index_name="Field Review Clips")
+        with source.open("rb") as stream:
+            uploaded = await resource.upload(stream, index_name="Field Review Clips")
         assert uploaded.job_id == "job_1"
         assert http.posts[-1]["idempotency_key"].startswith("workflow-upload:")
 

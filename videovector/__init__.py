@@ -92,6 +92,7 @@ from ._exceptions import (
 )
 from ._pagination import AsyncPage, SyncPage
 from ._types import (
+    AnalysisResponse,
     ApiKey,
     ApiKeyScope,
     ApiKeyWithSecret,
@@ -181,6 +182,7 @@ from ._types import (
 from ._version import __version__
 
 __all__ = [
+    "AnalysisResponse",
     # Version
     "__version__",
     # Clients

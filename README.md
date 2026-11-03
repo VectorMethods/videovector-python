@@ -61,6 +61,37 @@ is segment-only. Audio retains the two-hour duration limit. There is no cross-pa
 consolidation. `iter_outputs()` follows every manifest page; `import_job_id` processes
 the entire completed manifest without sending a bounded list of video IDs.
 
+## URL imports and direct local uploads
+
+Send one public HTTPS media URL or a list of up to eight, including individual
+YouTube videos. The server downloads and processes the sources through the same
+import pipeline; the SDK does not download them locally.
+
+```python
+job = client.workflow.import_urls(
+    ["https://example.com/video.mp4"], index_name="Field Review Clips"
+)
+client.import_jobs.wait_for_completion(job.job_id)
+for part in client.import_jobs.iter_outputs(job.job_id):
+    print(part.video_id)
+
+analysis = client.workflow.analyze(
+    instruction="Find the product demonstrations",
+    urls="https://example.com/video.mp4",
+)
+# Retain analysis.analysis_id and follow analysis.next_action.
+status = client.workflow.get_analysis(analysis.analysis_id)
+```
+
+`workflow.upload(file="/path/to/video.mp4")` uses the same direct storage transfer.
+`workflow.upload_files(["/path/to/video.mp4", "/path/to/audio.mp3"])` sends up to
+eight local files through resumable storage sessions with three concurrent
+transfers and bounded chunks. It returns the same asynchronous import-job type.
+Pass an explicit `idempotency_key` to resume the same submission after an interrupted
+transfer; keep the paths, order, file contents, and destination unchanged. Transfer
+errors retain `job_id` and `idempotency_key` in their details. URL methods return
+promptly and add no hidden status loop. The async client exposes the same methods.
+
 ## Configuration
 
 `authenticate()` explicitly validates the configured credential and requests

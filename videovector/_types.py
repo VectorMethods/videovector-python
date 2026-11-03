@@ -1371,3 +1371,20 @@ class VideoSegments(BaseModel):
     video_id: str
     run_id: Optional[str] = None
     segments: List[Segment]
+
+
+class AnalysisResponse(BaseModel):
+    """One analysis identity from source intake through complete result delivery."""
+
+    model_config = {"extra": "allow"}
+    analysis_id: str
+    status: str
+    terminal: bool
+    stage: str
+    message: str
+    scope: Dict[str, Any]
+    progress: Dict[str, Any]
+    results: Dict[str, Any]
+    files: List[Dict[str, Any]] = Field(default_factory=list)
+    errors: List[Dict[str, Any]] = Field(default_factory=list)
+    next_action: Dict[str, Any]
