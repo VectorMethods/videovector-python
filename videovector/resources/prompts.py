@@ -26,12 +26,8 @@ if TYPE_CHECKING:
 
 
 def _normalize_video_level(
-    video_level: Optional[
-        Union[PromptVideoLevelConfig, PromptVideoLevelConfigInput, Dict[str, Any]]
-    ],
-) -> Optional[Dict[str, Any]]:
-    if video_level is None:
-        return None
+    video_level: Union[PromptVideoLevelConfig, PromptVideoLevelConfigInput, Dict[str, Any]],
+) -> Dict[str, Any]:
     if isinstance(video_level, PromptVideoLevelConfig):
         return video_level.model_dump()
     return dict(video_level)
@@ -80,6 +76,14 @@ class PromptsResource:
                     "main_subject": {"type": "string"}
                 },
                 "required": ["actions"]
+            },
+            video_level={
+                "instructions_text": "Summarize the actions across the entire media.",
+                "json_schema": {
+                    "type": "object",
+                    "properties": {"summary": {"type": "string"}},
+                    "required": ["summary"]
+                }
             }
         )
 
@@ -100,9 +104,7 @@ class PromptsResource:
         prompt_text: str,
         json_schema: Dict[str, Any],
         description: str = "",
-        video_level: Optional[
-            Union[PromptVideoLevelConfig, PromptVideoLevelConfigInput, Dict[str, Any]]
-        ] = None,
+        video_level: Union[PromptVideoLevelConfig, PromptVideoLevelConfigInput, Dict[str, Any]],
         semantic_indexing: Optional[
             Union[PromptSemanticIndexingConfig, PromptSemanticIndexingConfigInput, Dict[str, Any]]
         ] = None,
@@ -116,7 +118,7 @@ class PromptsResource:
             prompt_text: Prompt text for LLM (10-5000 characters)
             json_schema: JSON Schema for structured output
             description: Optional description (max 500 characters)
-            video_level: Optional grounded video/audio-level extraction configuration
+            video_level: Required whole-media fields extracted together with segment fields
             semantic_indexing: Optional prompt-level semantic indexing configuration
             idempotency_key: Optional key for idempotent prompt creation
 
@@ -132,9 +134,7 @@ class PromptsResource:
             "prompt_text": prompt_text,
             "json_schema": json_schema,
         }
-        normalized_video_level = _normalize_video_level(video_level)
-        if normalized_video_level is not None:
-            body["video_level"] = normalized_video_level
+        body["video_level"] = _normalize_video_level(video_level)
         normalized_semantic_indexing = _normalize_semantic_indexing(semantic_indexing)
         if normalized_semantic_indexing is not None:
             body["semantic_indexing"] = normalized_semantic_indexing
@@ -201,7 +201,6 @@ class PromptsResource:
         semantic_indexing: Optional[
             Union[PromptSemanticIndexingConfig, PromptSemanticIndexingConfigInput, Dict[str, Any]]
         ] = None,
-        clear_video_level: bool = False,
         idempotency_key: Optional[str] = None,
     ) -> Prompt:
         """
@@ -213,9 +212,8 @@ class PromptsResource:
             description: New description (max 500 characters)
             prompt_text: New prompt text
             json_schema: New segment extraction schema
-            video_level: Replacement grounded video/audio-level extraction config
+            video_level: Replacement whole-media extraction config
             semantic_indexing: Replacement prompt-level semantic indexing config
-            clear_video_level: Remove any existing video-level config
             idempotency_key: Optional key for idempotent prompt updates
 
         Returns:
@@ -234,8 +232,6 @@ class PromptsResource:
             body["video_level"] = _normalize_video_level(video_level)
         if semantic_indexing is not None:
             body["semantic_indexing"] = _normalize_semantic_indexing(semantic_indexing)
-        if clear_video_level:
-            body["clear_video_level"] = True
 
         response = self._client.put(
             f"/prompts/{prompt_id}",
@@ -329,9 +325,7 @@ class AsyncPromptsResource:
         prompt_text: str,
         json_schema: Dict[str, Any],
         description: str = "",
-        video_level: Optional[
-            Union[PromptVideoLevelConfig, PromptVideoLevelConfigInput, Dict[str, Any]]
-        ] = None,
+        video_level: Union[PromptVideoLevelConfig, PromptVideoLevelConfigInput, Dict[str, Any]],
         semantic_indexing: Optional[
             Union[PromptSemanticIndexingConfig, PromptSemanticIndexingConfigInput, Dict[str, Any]]
         ] = None,
@@ -344,9 +338,7 @@ class AsyncPromptsResource:
             "prompt_text": prompt_text,
             "json_schema": json_schema,
         }
-        normalized_video_level = _normalize_video_level(video_level)
-        if normalized_video_level is not None:
-            body["video_level"] = normalized_video_level
+        body["video_level"] = _normalize_video_level(video_level)
         normalized_semantic_indexing = _normalize_semantic_indexing(semantic_indexing)
         if normalized_semantic_indexing is not None:
             body["semantic_indexing"] = normalized_semantic_indexing
@@ -393,7 +385,6 @@ class AsyncPromptsResource:
         semantic_indexing: Optional[
             Union[PromptSemanticIndexingConfig, PromptSemanticIndexingConfigInput, Dict[str, Any]]
         ] = None,
-        clear_video_level: bool = False,
         idempotency_key: Optional[str] = None,
     ) -> Prompt:
         """Update a prompt definition."""
@@ -410,8 +401,6 @@ class AsyncPromptsResource:
             body["video_level"] = _normalize_video_level(video_level)
         if semantic_indexing is not None:
             body["semantic_indexing"] = _normalize_semantic_indexing(semantic_indexing)
-        if clear_video_level:
-            body["clear_video_level"] = True
 
         response = await self._client.put(
             f"/prompts/{prompt_id}",

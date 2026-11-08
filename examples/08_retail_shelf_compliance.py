@@ -10,6 +10,14 @@ def main() -> None:
 
     with api_client() as client:
         prompt = client.prompts.create(
+            video_level={
+                "instructions_text": "Summarize the main observations across the whole media.",
+                "json_schema": {
+                    "type": "object",
+                    "properties": {"summary": {"type": "string"}},
+                    "required": ["summary"],
+                },
+            },
             name="Retail Shelf Compliance Review",
             prompt_text=(
                 "Review this retail aisle segment. Identify products, shelf position, "
@@ -45,8 +53,6 @@ def main() -> None:
         run = client.prompt_runs.execute(
             prompt_id=prompt.prompt_id,
             target={"type": "index", "index_id": index_id},
-            video_segmentation_type="fixed",
-            video_segment_duration=20,
             idempotency_key=idempotency_key("run-retail-compliance"),
         )
         print(run.run_id)

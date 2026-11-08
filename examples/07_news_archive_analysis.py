@@ -10,6 +10,14 @@ def main() -> None:
 
     with api_client() as client:
         prompt = client.prompts.create(
+            video_level={
+                "instructions_text": "Summarize the main observations across the whole media.",
+                "json_schema": {
+                    "type": "object",
+                    "properties": {"summary": {"type": "string"}},
+                    "required": ["summary"],
+                },
+            },
             name="News Archive Story Metadata",
             description="Extracts newsroom-specific metadata for archive search and licensing.",
             prompt_text=(

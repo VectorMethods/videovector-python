@@ -10,6 +10,14 @@ def main() -> None:
 
     with api_client() as client:
         prompt = client.prompts.create(
+            video_level={
+                "instructions_text": "Summarize the main observations across the whole media.",
+                "json_schema": {
+                    "type": "object",
+                    "properties": {"summary": {"type": "string"}},
+                    "required": ["summary"],
+                },
+            },
             name="Sports Highlight Detector",
             prompt_text=(
                 "Analyze this sports segment for highlight-worthy moments. Identify play type, "
@@ -32,7 +40,6 @@ def main() -> None:
         run = client.prompt_runs.execute(
             prompt_id=prompt.prompt_id,
             target={"type": "index", "index_id": index_id},
-            enable_transcription=True,
             enable_image_embedding=True,
             idempotency_key=idempotency_key("run-sports-highlights"),
         )

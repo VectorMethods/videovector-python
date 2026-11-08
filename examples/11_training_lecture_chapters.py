@@ -42,7 +42,6 @@ def main() -> None:
         run = client.prompt_runs.execute(
             prompt_id=prompt.prompt_id,
             target={"type": "index", "index_id": index_id},
-            audio_segmentation_type="content_aware",
             idempotency_key=idempotency_key("run-training-chapters"),
         )
         print(run.run_id)

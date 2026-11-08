@@ -48,12 +48,6 @@ class ImportJobStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-class SegmentationType(str, Enum):
-    SMART = "smart"
-    FIXED = "fixed"
-    CONTENT_AWARE = "content_aware"
-
-
 class ProcessingModel(str, Enum):
     GEMINI_3_PRO_PREVIEW = "gemini-3-pro-preview"
     GEMINI_2_5_PRO = "gemini-2.5-pro"
@@ -135,20 +129,6 @@ class SegmentRunProcessingStatus(BaseModel):
     attempt_id: Optional[str] = None
 
 
-class VideoLevelProcessingStatus(BaseModel):
-    """Inline grounded video/audio-level extraction progress inside a video status snapshot."""
-
-    status: str
-    result_available: bool = False
-    successful_segment_count: int = 0
-    failed_segment_count: int = 0
-    started_at: Optional[str] = None
-    completed_at: Optional[str] = None
-    updated_at: Optional[str] = None
-    error_message: Optional[str] = None
-    attempt_id: Optional[str] = None
-
-
 class PromptRunStopState(BaseModel):
     """Stop-request lifecycle for a prompt run."""
 
@@ -173,7 +153,6 @@ class PromptRunProcessingStatus(BaseModel):
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     attempt_id: Optional[str] = None
-    video_level: Optional[VideoLevelProcessingStatus] = None
     segments: List[SegmentRunProcessingStatus] = Field(default_factory=list)
 
 
@@ -253,10 +232,8 @@ class Segment(BaseModel):
     marker: MarkerInfo = Field(default_factory=MarkerInfo)
     metadata_markers: Dict[str, MarkerInfo] = Field(default_factory=dict)
     field_extraction_succeeded: Optional[bool] = None
-    transcription_succeeded: Optional[bool] = None
     image_embedding_succeeded: Optional[bool] = None
     field_extraction_error: Optional[str] = None
-    transcription_error: Optional[str] = None
     image_embedding_error: Optional[str] = None
 
 
@@ -273,7 +250,7 @@ class Index(BaseModel):
 
 
 class PromptVideoLevelConfig(BaseModel):
-    """Grounded video/audio-level extraction configuration attached to a prompt."""
+    """Whole-media extraction configuration attached to a prompt."""
 
     instructions_text: str
     json_schema: Dict[str, Any]
@@ -295,7 +272,7 @@ class Prompt(BaseModel):
     description: str
     prompt_text: str
     json_schema: Dict[str, Any]
-    video_level: Optional[PromptVideoLevelConfig] = None
+    video_level: PromptVideoLevelConfig
     semantic_indexing: PromptSemanticIndexingConfig = Field(
         default_factory=PromptSemanticIndexingConfig
     )
@@ -332,27 +309,14 @@ class PromptRun(BaseModel):
     total_segments: int = 0
     completed_segments: int = 0
     field_extraction_failures: int = 0
-    transcription_failures: int = 0
     image_embedding_failures: int = 0
     field_extraction_succeeded: Optional[bool] = None
-    transcription_succeeded: Optional[bool] = None
     image_embedding_succeeded: Optional[bool] = None
     error_message: Optional[str] = None
-    video_segmentation_type: str = "smart"
-    audio_segmentation_type: str = "content_aware"
-    image_segmentation_type: str = "image"
-    video_segment_duration: Optional[int] = None
-    audio_segment_duration: Optional[int] = None
     created_new_segments: bool = False
     processing_model: Optional[str] = None
     total_video_seconds: float = 0.0
-    enable_transcription: bool = True
     enable_image_embedding: bool = True
-    video_level_enabled: bool = False
-    video_level_total_items: int = 0
-    video_level_completed_items: int = 0
-    video_level_failed_items: int = 0
-    video_level_partial_items: int = 0
     stop_state: PromptRunStopState = Field(default_factory=PromptRunStopState)
     billing_estimated_mt: float = 0.0
     billing_actual_mt: float = 0.0
@@ -389,10 +353,8 @@ class SegmentRunResult(BaseModel):
     processing_warning: Optional[str] = None
     schema_used: Optional[str] = None
     field_extraction_succeeded: bool = True
-    transcription_succeeded: Optional[bool] = None
     image_embedding_succeeded: Optional[bool] = None
     field_extraction_error: Optional[str] = None
-    transcription_error: Optional[str] = None
     image_embedding_error: Optional[str] = None
     marker: MarkerInfo = Field(default_factory=MarkerInfo)
     extracted_metadata_markers: Dict[str, MarkerInfo] = Field(default_factory=dict)
@@ -400,7 +362,7 @@ class SegmentRunResult(BaseModel):
 
 
 class PromptRunVideoResult(BaseModel):
-    """Grounded video/audio-level extraction result for a single media item in a run."""
+    """Grounded whole-media extraction result for a single media item in a run."""
 
     result_type: Literal["video"] = "video"
     result_id: Optional[str] = None
@@ -417,15 +379,10 @@ class PromptRunVideoResult(BaseModel):
     raw_llm_response: Optional[str] = None
     processing_warning: Optional[str] = None
     schema_used: Optional[str] = None
-    successful_segment_count: int = 0
-    failed_segment_count: int = 0
     source_fingerprint: Optional[str] = None
     embedding_status: Optional[str] = None
     embedding_error: Optional[str] = None
     attempt_id: Optional[str] = None
-    error_message: Optional[str] = None
-    started_at: Optional[str] = None
-    completed_at: Optional[str] = None
     segment_uri: Optional[str] = None
     gcs_uri: Optional[str] = None
     thumbnail_uri: Optional[str] = None
@@ -447,7 +404,6 @@ class PromptRunFailureOperationCounts(BaseModel):
     """Failure counts grouped by operation type."""
 
     field_extraction: int = 0
-    transcription: int = 0
     image_embedding: int = 0
     processing: int = 0
 
@@ -458,7 +414,6 @@ class PromptRunFailedSegment(BaseModel):
     segment_id: str
     failed_operations: List[str] = Field(default_factory=list)
     field_extraction_error: Optional[str] = None
-    transcription_error: Optional[str] = None
     image_embedding_error: Optional[str] = None
     failure_stage: Optional[str] = None
     failure_message: Optional[str] = None
@@ -530,7 +485,6 @@ class PromptRunSegmentRetryStatus(BaseModel):
     billing_status: Optional[str] = None
     billing_error: Optional[str] = None
     field_extraction_succeeded: Optional[bool] = None
-    transcription_succeeded: Optional[bool] = None
     image_embedding_succeeded: Optional[bool] = None
 
 
@@ -1180,7 +1134,7 @@ class WorkflowPromptDefinition(BaseModel):
     description: str
     prompt_text: str
     json_schema: Dict[str, Any]
-    video_level: Optional[PromptVideoLevelConfig] = None
+    video_level: PromptVideoLevelConfig
     semantic_indexing: PromptSemanticIndexingConfig = Field(
         default_factory=PromptSemanticIndexingConfig
     )

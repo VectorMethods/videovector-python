@@ -6,7 +6,7 @@ Provides methods for executing prompts and retrieving results.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
 from .._pagination import (
@@ -41,23 +41,6 @@ def _resolve_generated_idempotency_key(operation: str, idempotency_key: Optional
     return f"prompt-run-{operation}:{uuid4().hex}"
 
 
-def _validate_segmentation_type(
-    field_name: str,
-    value: str,
-    allowed: set[str],
-) -> None:
-    if value not in allowed:
-        allowed_values = ", ".join(sorted(allowed))
-        raise ValueError(f"{field_name} must be one of: {allowed_values}")
-
-
-def _validate_segment_duration(field_name: str, value: Optional[int]) -> None:
-    if value is None:
-        return
-    if isinstance(value, bool) or not isinstance(value, int) or not (1 <= value <= 300):
-        raise ValueError(f"{field_name} must be an integer between 1 and 300")
-
-
 def _validate_prompt_run_target(target: ExecutePromptTarget) -> None:
     if not isinstance(target, dict):
         raise ValueError("target must be an object")
@@ -90,53 +73,15 @@ def _build_prompt_run_request_body(
     *,
     prompt_id: str,
     target: ExecutePromptTarget,
-    video_segmentation_type: Literal["smart", "fixed", "content_aware"] = "smart",
-    audio_segmentation_type: Literal["fixed", "content_aware"] = "content_aware",
-    video_segment_duration: Optional[int] = None,
-    audio_segment_duration: Optional[int] = None,
     processing_model: Optional[str] = None,
-    enable_transcription: bool = True,
-    enable_image_embedding: bool = True,
+    enable_image_embedding: Optional[bool] = None,
 ) -> Dict[str, Any]:
     _validate_prompt_run_target(target)
-    _validate_segmentation_type(
-        "video_segmentation_type",
-        video_segmentation_type,
-        {"smart", "fixed", "content_aware"},
-    )
-    _validate_segmentation_type(
-        "audio_segmentation_type",
-        audio_segmentation_type,
-        {"fixed", "content_aware"},
-    )
-    _validate_segment_duration("video_segment_duration", video_segment_duration)
-    _validate_segment_duration("audio_segment_duration", audio_segment_duration)
-
-    if video_segmentation_type == "fixed" and video_segment_duration is None:
-        raise ValueError(
-            "video_segment_duration is required when video_segmentation_type is 'fixed'"
-        )
-    if audio_segmentation_type == "fixed" and audio_segment_duration is None:
-        raise ValueError(
-            "audio_segment_duration is required when audio_segmentation_type is 'fixed'"
-        )
-
-    body: Dict[str, Any] = {
-        "prompt_id": prompt_id,
-        "target": target,
-        "video_segmentation_type": video_segmentation_type,
-        "audio_segmentation_type": audio_segmentation_type,
-        "enable_transcription": enable_transcription,
-        "enable_image_embedding": enable_image_embedding,
-    }
-
-    if video_segment_duration is not None:
-        body["video_segment_duration"] = video_segment_duration
-    if audio_segment_duration is not None:
-        body["audio_segment_duration"] = audio_segment_duration
+    body: Dict[str, Any] = {"prompt_id": prompt_id, "target": target}
     if processing_model is not None:
         body["processing_model"] = processing_model
-
+    if enable_image_embedding is not None:
+        body["enable_image_embedding"] = enable_image_embedding
     return body
 
 
@@ -154,7 +99,6 @@ class PromptRunsResource:
         run = client.prompt_runs.execute(
             prompt_id="prompt_123",
             target={"type": "index", "index_id": "idx_123"},
-            video_segmentation_type="smart",
             processing_model="gemini-2.5-flash"
         )
 
@@ -175,13 +119,8 @@ class PromptRunsResource:
         *,
         prompt_id: str,
         target: ExecutePromptTarget,
-        video_segmentation_type: Literal["smart", "fixed", "content_aware"] = "smart",
-        audio_segmentation_type: Literal["fixed", "content_aware"] = "content_aware",
-        video_segment_duration: Optional[int] = None,
-        audio_segment_duration: Optional[int] = None,
         processing_model: Optional[str] = None,
-        enable_transcription: bool = True,
-        enable_image_embedding: bool = True,
+        enable_image_embedding: Optional[bool] = None,
         idempotency_key: Optional[str] = None,
     ) -> PromptRun:
         """
@@ -193,13 +132,8 @@ class PromptRunsResource:
                 - {"type": "index", "index_id": "idx_123"}
                 - {"type": "videos", "video_ids": ["vid_1", "vid_2"]}
                 - {"type": "playground"}
-            video_segmentation_type: How to segment videos (smart, fixed, content_aware)
-            audio_segmentation_type: How to segment audio (fixed, content_aware)
-            video_segment_duration: Duration for fixed segments (1-300 seconds)
-            audio_segment_duration: Duration for fixed audio segments (1-300 seconds)
             processing_model: LLM model for extraction
                 Options: gemini-3-pro-preview, gemini-2.5-pro, gemini-2.5-flash, gemini-2.5-flash-lite
-            enable_transcription: Enable speech-to-text transcription
             enable_image_embedding: Enable image embeddings for visual search
             idempotency_key: Optional key for idempotent requests
 
@@ -213,12 +147,7 @@ class PromptRunsResource:
         body = _build_prompt_run_request_body(
             prompt_id=prompt_id,
             target=target,
-            video_segmentation_type=video_segmentation_type,
-            audio_segmentation_type=audio_segmentation_type,
-            video_segment_duration=video_segment_duration,
-            audio_segment_duration=audio_segment_duration,
             processing_model=processing_model,
-            enable_transcription=enable_transcription,
             enable_image_embedding=enable_image_embedding,
         )
         resolved_idempotency_key = _resolve_generated_idempotency_key("execute", idempotency_key)
@@ -240,24 +169,14 @@ class PromptRunsResource:
         *,
         prompt_id: str,
         target: ExecutePromptTarget,
-        video_segmentation_type: Literal["smart", "fixed", "content_aware"] = "smart",
-        audio_segmentation_type: Literal["fixed", "content_aware"] = "content_aware",
-        video_segment_duration: Optional[int] = None,
-        audio_segment_duration: Optional[int] = None,
         processing_model: Optional[str] = None,
-        enable_transcription: bool = True,
-        enable_image_embedding: bool = True,
+        enable_image_embedding: Optional[bool] = None,
     ) -> PromptRunCostEstimate:
         """Estimate the billing cost of a prompt run without starting it."""
         body = _build_prompt_run_request_body(
             prompt_id=prompt_id,
             target=target,
-            video_segmentation_type=video_segmentation_type,
-            audio_segmentation_type=audio_segmentation_type,
-            video_segment_duration=video_segment_duration,
-            audio_segment_duration=audio_segment_duration,
             processing_model=processing_model,
-            enable_transcription=enable_transcription,
             enable_image_embedding=enable_image_embedding,
         )
         response = self._client.post("/prompt-runs/estimate", json=body)
@@ -328,7 +247,7 @@ class PromptRunsResource:
         return [LlmCall.model_validate(call) for call in response]
 
     def get_video_result(self, run_id: str, video_id: str) -> PromptRunVideoResult:
-        """Get the grounded video/audio-level extraction result for one media item in a run."""
+        """Get the whole-media extraction result for one media item in a run."""
         response = self._client.get(f"/prompt-runs/{run_id}/videos/{video_id}/video-result")
         return PromptRunVideoResult.model_validate(response)
 
@@ -457,25 +376,15 @@ class AsyncPromptRunsResource:
         *,
         prompt_id: str,
         target: ExecutePromptTarget,
-        video_segmentation_type: Literal["smart", "fixed", "content_aware"] = "smart",
-        audio_segmentation_type: Literal["fixed", "content_aware"] = "content_aware",
-        video_segment_duration: Optional[int] = None,
-        audio_segment_duration: Optional[int] = None,
         processing_model: Optional[str] = None,
-        enable_transcription: bool = True,
-        enable_image_embedding: bool = True,
+        enable_image_embedding: Optional[bool] = None,
         idempotency_key: Optional[str] = None,
     ) -> PromptRun:
         """Execute a prompt on videos or an index."""
         body = _build_prompt_run_request_body(
             prompt_id=prompt_id,
             target=target,
-            video_segmentation_type=video_segmentation_type,
-            audio_segmentation_type=audio_segmentation_type,
-            video_segment_duration=video_segment_duration,
-            audio_segment_duration=audio_segment_duration,
             processing_model=processing_model,
-            enable_transcription=enable_transcription,
             enable_image_embedding=enable_image_embedding,
         )
         resolved_idempotency_key = _resolve_generated_idempotency_key("execute", idempotency_key)
@@ -497,24 +406,14 @@ class AsyncPromptRunsResource:
         *,
         prompt_id: str,
         target: ExecutePromptTarget,
-        video_segmentation_type: Literal["smart", "fixed", "content_aware"] = "smart",
-        audio_segmentation_type: Literal["fixed", "content_aware"] = "content_aware",
-        video_segment_duration: Optional[int] = None,
-        audio_segment_duration: Optional[int] = None,
         processing_model: Optional[str] = None,
-        enable_transcription: bool = True,
-        enable_image_embedding: bool = True,
+        enable_image_embedding: Optional[bool] = None,
     ) -> PromptRunCostEstimate:
         """Estimate the billing cost of a prompt run without starting it."""
         body = _build_prompt_run_request_body(
             prompt_id=prompt_id,
             target=target,
-            video_segmentation_type=video_segmentation_type,
-            audio_segmentation_type=audio_segmentation_type,
-            video_segment_duration=video_segment_duration,
-            audio_segment_duration=audio_segment_duration,
             processing_model=processing_model,
-            enable_transcription=enable_transcription,
             enable_image_embedding=enable_image_embedding,
         )
         response = await self._client.post("/prompt-runs/estimate", json=body)
@@ -553,7 +452,7 @@ class AsyncPromptRunsResource:
         return [LlmCall.model_validate(call) for call in response]
 
     async def get_video_result(self, run_id: str, video_id: str) -> PromptRunVideoResult:
-        """Get the grounded video/audio-level extraction result for one media item in a run."""
+        """Get the whole-media extraction result for one media item in a run."""
         response = await self._client.get(f"/prompt-runs/{run_id}/videos/{video_id}/video-result")
         return PromptRunVideoResult.model_validate(response)
 

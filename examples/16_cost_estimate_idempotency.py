@@ -13,7 +13,6 @@ def main() -> None:
         estimate = client.prompt_runs.estimate(
             prompt_id=prompt_id,
             target={"type": "index", "index_id": index_id},
-            video_segmentation_type="smart",
             processing_model="gemini-2.5-flash",
         )
         print("estimated metered units", estimate.estimated_mt)
@@ -21,7 +20,6 @@ def main() -> None:
         run = client.prompt_runs.execute(
             prompt_id=prompt_id,
             target={"type": "index", "index_id": index_id},
-            video_segmentation_type="smart",
             processing_model="gemini-2.5-flash",
             idempotency_key=idempotency_key("run-estimated-workflow"),
         )
